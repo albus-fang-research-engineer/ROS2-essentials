@@ -241,6 +241,12 @@ not surface until a grasp misses.
 - **Measure the marker.** `MARKER_SIZE` is the black square edge in metres, and
   printers lie about scale. A 2% size error is a 2% range bias no number of
   extra samples will average away.
+- **Never set a socket-buffer `min` in `cyclonedds.xml`.** A `min` the kernel
+  cannot grant (capped by `net.core.rmem_max`, ~425 KB by default) makes
+  Cyclone fail domain creation, and every node dies with
+  `rmw_create_node: failed to create domain, error Error` — which names
+  neither the buffer nor the config file. Raise `net.core.rmem_max` on the host
+  if you need the headroom for image topics.
 - **Two NICs, one Cyclone.** With a robot NIC and a lab NIC, pin the interface
   in `config/cyclonedds.xml` or discovery will intermittently pick wrong.
 - **A sourced ROS install on the host poisons the build.** If your `.bashrc`

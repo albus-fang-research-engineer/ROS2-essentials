@@ -50,6 +50,29 @@ if [ -e "${ROOT}/.env" ]; then
   [ -f "${ROOT}/calibrations/${CELL}/extrinsics.yaml" ] \
     && ok "extrinsics present for ${CELL}" \
     || warn "no calibrations/${CELL}/extrinsics.yaml -- the cell profile will refuse to start"
+
+  # A cell file generated before the R2E_* rename keeps the old key names,
+  # which compose silently ignores -- the values look set but never apply.
+  STALE=$(grep -oE '^(ROS_DISTRO|ROS_DOMAIN_ID|RMW_IMPLEMENTATION|CYCLONEDDS_URI|CAMERA_SERIAL)=' \
+            "$(readlink -f "${ROOT}/.env")" 2>/dev/null | tr -d '=' | tr '\n' ' ')
+  if [ -n "${STALE}" ]; then
+    bad "stale keys in your cell file: ${STALE}"
+    echo "        compose reads R2E_DISTRO / R2E_DOMAIN_ID / R2E_RMW /"
+    echo "        R2E_CYCLONEDDS_URI / CAMERA_EXTRA_ARGS. The old names are"
+    echo "        ignored, so those settings are silently not applied."
+  else
+    ok "cell file uses current key names"
+  fi
+
+  # A hard socket-buffer minimum in cyclonedds.xml that the kernel cannot meet
+  # kills domain creation for every node with an opaque error.
+  CDDS="${ROOT}/config/cyclonedds.xml"
+  if [ -f "${CDDS}" ] && grep -qE 'MinimumSocketReceiveBufferSize|SocketReceiveBufferSize[^>]*min=' "${CDDS}"; then
+    RMEM=$(cat /proc/sys/net/core/rmem_max 2>/dev/null || echo 0)
+    warn "cyclonedds.xml requests a socket buffer minimum; host rmem_max=${RMEM}"
+    echo "        If it exceeds rmem_max, every node fails with"
+    echo "        'rmw_create_node: failed to create domain'."
+  fi
 fi
 
 echo "display"

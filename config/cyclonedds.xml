@@ -18,10 +18,25 @@
       <AllowMulticast>default</AllowMulticast>
       <MaxMessageSize>65500B</MaxMessageSize>
     </General>
-    <Internal>
-      <!-- Large image messages over loopback benefit from a bigger buffer. -->
-      <MinimumSocketReceiveBufferSize>10MB</MinimumSocketReceiveBufferSize>
-    </Internal>
+    <!--
+      NO SOCKET BUFFER MINIMUM HERE, ON PURPOSE.
+
+      A `min` is a hard requirement: if the kernel will not grant it, Cyclone
+      fails to create the domain and every node dies with the deeply unhelpful
+      "rmw_create_node: failed to create domain, error Error". The kernel caps
+      it at net.core.rmem_max, which defaults to roughly 425 KB, far below the
+      10 MB that used to be requested here.
+
+      Large image topics genuinely do benefit from a bigger buffer. If you see
+      dropped frames on the colour stream, raise the CEILING on the host
+      instead of demanding a floor in this file:
+
+          sudo sysctl -w net.core.rmem_max=16777216
+
+      On a shared machine that affects everyone and does not survive a reboot,
+      so treat it as a deliberate step rather than a default. Without a `min`,
+      Cyclone simply takes what it can get.
+    -->
     <Tracing>
       <Verbosity>warning</Verbosity>
       <OutputFile>stderr</OutputFile>
