@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build a source overlay into /opt/overlay from a .repos file. Image-build only.
 # usage: overlay-build /tmp/foo.repos
-set -euo pipefail
+set -eo pipefail
 REPOS_FILE="$1"
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
 mkdir -p "${OVERLAY_WS}/src"
