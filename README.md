@@ -121,6 +121,16 @@ docker compose --profile cell up -d --force-recreate cell
   show `/base_link`; that is ROS 1 legacy and ROS 2 `tf2` rejects it.
 - **UR frames.** `base_link` is the URDF root; `base` is the ROS-Industrial
   rotated frame. Mixing them costs a 180° yaw that looks almost plausible.
+- **Never solve for an optical frame.** The camera driver already publishes
+  `camera_link -> camera_color_frame -> camera_color_optical_frame`. If the
+  calibration targets the optical frame and you publish that result, the
+  optical frame gets a second parent, TF stops being a tree, and lookups go
+  non-deterministic. `aruco_ros` separates `camera_frame` (intrinsics /
+  projection) from `reference_frame` (what the pose is reported in), so
+  `CAMERA_TF_ROOT=camera_link` makes the solve target the driver's root link
+  directly — no post-hoc composition, and nothing to redo if you switch
+  between the colour and depth optical frames. `promote_calibration.py`
+  refuses to write an optical-frame child.
 - **Measure the marker.** `MARKER_SIZE` is the black square edge in metres, and
   printers lie about scale. A 2% size error is a 2% range bias no number of
   extra samples will average away.

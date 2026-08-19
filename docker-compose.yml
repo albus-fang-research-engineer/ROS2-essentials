@@ -142,6 +142,7 @@ services:
         marker_size:=${MARKER_SIZE:-0.05}
         marker_frame:=${MARKER_FRAME:-aruco_marker_frame}
         camera_optical_frame:=${CAMERA_OPTICAL_FRAME:-camera_color_optical_frame}
+        camera_ref_frame:=${CAMERA_TF_ROOT:-camera_link}
         image_topic:=${IMAGE_TOPIC:-/camera/camera/color/image_raw}
         camera_info_topic:=${CAMERA_INFO_TOPIC:-/camera/camera/color/camera_info}
 
@@ -156,7 +157,7 @@ services:
         name:=${CALIB_NAME:-default_eob}
         robot_base_frame:=${ROBOT_BASE_FRAME:-base_link}
         robot_effector_frame:=${ROBOT_EE_FRAME:-tool0}
-        tracking_base_frame:=${CAMERA_OPTICAL_FRAME:-camera_color_optical_frame}
+        tracking_base_frame:=${CAMERA_TF_ROOT:-camera_link}
         tracking_marker_frame:=${MARKER_FRAME:-aruco_marker_frame}
         freehand_robot_movement:=${FREEHAND:-true}
 

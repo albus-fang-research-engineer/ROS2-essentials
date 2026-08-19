@@ -103,6 +103,9 @@ def main() -> int:
                     default=REPO_ROOT / 'calibrations')
     ap.add_argument('--calibration-type', default=None,
                     help='Override if the .calib does not record it.')
+    ap.add_argument('--allow-optical-child', action='store_true',
+                    help='Promote even if the child is an optical frame. Only '
+                         'correct if you composed out the driver extrinsics.')
     ap.add_argument('--dry-run', action='store_true')
     args = ap.parse_args()
 
@@ -130,6 +133,23 @@ def main() -> int:
     print(f'  translation  {float(t["x"]):+.4f} {float(t["y"]):+.4f} '
           f'{float(t["z"]):+.4f}   (|t| = {dist:.4f} m)')
     print(f'  rotation     {qx:+.5f} {qy:+.5f} {qz:+.5f} {qw:+.5f}')
+
+    # Refuse to promote a result that would give the camera driver's optical
+    # frame a second parent. TF is a tree; the driver already publishes
+    # camera_link -> ... -> *_optical_frame, so attaching there makes lookups
+    # non-deterministic and orphans the driver's subtree. Solve for the
+    # driver's ROOT link instead (set CAMERA_TF_ROOT / camera_ref_frame).
+    if child.endswith('_optical_frame'):
+        return err(
+            f'refusing to promote: child frame is {child}\n'
+            f'  The camera driver already publishes a parent for that frame,\n'
+            f'  and TF allows only one. Re-run the calibration with\n'
+            f'  camera_ref_frame / CAMERA_TF_ROOT set to the driver\'s root\n'
+            f'  link (camera_link for RealSense) so the solve targets that.\n'
+            f'  Override with --allow-optical-child only if you have already\n'
+            f'  composed out the driver\'s internal extrinsics yourself.'
+        ) if not args.allow_optical_child else print(
+            f'  WARN: promoting with child={child} as explicitly requested')
 
     # A camera 4 m from the robot base, or 2 cm from it, is almost always a
     # frame-convention mistake rather than a real measurement.
