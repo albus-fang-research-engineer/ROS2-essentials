@@ -55,6 +55,35 @@ ENV WS=/ws \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
 
+
+# Make interactive shells working ROS shells. Written to BOTH ~/.bashrc
+# (docker exec -it ... bash) and /etc/profile.d (login shells): neither
+# covers the other, and people reach for both.
+RUN cat > /etc/profile.d/10-ros2-essentials.sh <<'RCEOF'
+# --- ros2-essentials -------------------------------------------------------
+# The ENTRYPOINT sources these, but `docker exec -it <container> bash` does NOT
+# run the entrypoint: it starts a fresh process from the image rather than a
+# child of PID 1. Without this, an exec'd shell has no ros2 on PATH at all.
+if [ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]; then
+  . "/opt/ros/${ROS_DISTRO}/setup.bash"
+fi
+if [ -n "${OVERLAY_WS:-}" ] && [ -f "${OVERLAY_WS}/install/setup.bash" ]; then
+  . "${OVERLAY_WS}/install/setup.bash"
+fi
+if [ -n "${WS:-}" ] && [ -f "${WS}/install/setup.bash" ]; then
+  . "${WS}/install/setup.bash"
+fi
+if [ -f /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash ]; then
+  . /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash
+fi
+# Which container am I in, and on which DDS domain? Saves a lot of confusion
+# when several stacks are up and one of them is on the wrong domain.
+echo "ros2-essentials | ${ROS_DISTRO} | domain ${ROS_DOMAIN_ID:-0} | rmw ${RMW_IMPLEMENTATION:-default}"
+RCEOF
+RUN chmod 0644 /etc/profile.d/10-ros2-essentials.sh \
+ && cat /etc/profile.d/10-ros2-essentials.sh >> /home/${USERNAME}/.bashrc \
+ && chown ${HOST_UID}:${HOST_GID} /home/${USERNAME}/.bashrc
+
 COPY docker/common/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/common/ws-build      /usr/local/bin/ws-build
 COPY docker/common/overlay-build /usr/local/bin/overlay-build

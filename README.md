@@ -285,6 +285,13 @@ not surface until a grasp misses.
   if you need the headroom for image topics.
 - **Two NICs, one Cyclone.** With a robot NIC and a lab NIC, pin the interface
   in `config/cyclonedds.xml` or discovery will intermittently pick wrong.
+- **Container env is frozen at create time.** Editing `cells/<host>.env`
+  changes nothing about containers that already exist — `ROS_DOMAIN_ID` and
+  friends are baked in when the container is *created*, not read at each
+  start. A stack half-migrated this way ends up with services on two different
+  DDS domains that cannot see each other, and nothing reports an error. After
+  any cell-file change: `docker compose up -d --force-recreate`. `make doctor`
+  compares every running container against the cell file.
 - **A sourced ROS install on the host poisons the build.** If your `.bashrc`
   sources `/opt/ros/noetic/setup.bash`, your shell exports `ROS_DISTRO=noetic`
   — and both make's `?=` and compose's `${VAR:-default}` treat an exported

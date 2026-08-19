@@ -75,6 +75,28 @@ if [ -e "${ROOT}/.env" ]; then
   fi
 fi
 
+echo "running containers"
+if command -v docker >/dev/null 2>&1 && [ -n "${R2E_DOMAIN_ID:-}" ]; then
+  MISMATCH=0
+  for c in $(docker ps --format '{{.Names}}' 2>/dev/null); do
+    CDOM=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" 2>/dev/null \
+             | sed -n 's/^ROS_DOMAIN_ID=//p')
+    [ -z "$CDOM" ] && continue
+    if [ "$CDOM" != "${R2E_DOMAIN_ID}" ]; then
+      bad "$c is on ROS_DOMAIN_ID=$CDOM but the cell says ${R2E_DOMAIN_ID}"
+      MISMATCH=1
+    fi
+  done
+  if [ "$MISMATCH" = 1 ]; then
+    echo "        Container env is fixed when the container is CREATED, not"
+    echo "        read at each start. Editing the cell file does nothing to"
+    echo "        containers that already exist:"
+    echo "          docker compose up -d --force-recreate"
+  else
+    ok "running containers agree on domain ${R2E_DOMAIN_ID}"
+  fi
+fi
+
 echo "display"
 [ -n "${DISPLAY:-}" ] && ok "DISPLAY=${DISPLAY}" || warn "DISPLAY unset (GUI services will fail)"
 [ -f /tmp/.docker.xauth ] && ok "xauth cookie present" || warn "run: make x11"
