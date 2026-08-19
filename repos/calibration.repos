@@ -1,0 +1,15 @@
+# Pinned by branch for now. Once you have a calibration you trust, replace
+# `version:` with the resolved SHA so the image is reproducible:
+#   docker compose run --rm handeye bash -c 'cd $OVERLAY_WS/src/easy_handeye2 && git rev-parse HEAD'
+repositories:
+  easy_handeye2:
+    type: git
+    url: https://github.com/marcoesposito1988/easy_handeye2.git
+    version: master
+
+  # Hardware-free playground (Panda + simulated tracker). The only way to
+  # smoke-test this image without the arm and camera on the bench.
+  easy_handeye2_demo:
+    type: git
+    url: https://github.com/marcoesposito1988/easy_handeye2_demo.git
+    version: master

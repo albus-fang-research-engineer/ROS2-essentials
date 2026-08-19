@@ -1,0 +1,239 @@
+# ===========================================================================
+# ros2-essentials
+#
+# One file, module boundaries expressed as PROFILES. A machine's identity is
+# its COMPOSE_PROFILES value in cells/<hostname>.env -- the manipulator bench
+# runs `ur,camera,cell`, the perception box runs `perception,cell`, same repo.
+#
+#   host networking + shared IPC
+#     ur_robot_driver opens reverse-connection ports the controller dials back
+#     into, and DDS discovery across bridge networks is a reliable source of
+#     wasted afternoons. Host netns fixes both, and lets these containers talk
+#     to nodes you run natively on the host.
+#
+# Adding a module = one service block + one profile name. Images are built by
+# the Makefile (base -> base-gui -> modules), because compose does not order
+# builds by FROM dependency.
+# ===========================================================================
+
+x-ros: &ros
+  network_mode: host
+  ipc: host
+  stdin_open: true
+  tty: true
+  restart: "no"
+  environment: &ros-env
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+    RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+    CYCLONEDDS_URI: ${CYCLONEDDS_URI:-}
+    CELL_NAME: ${CELL_NAME:-unnamed-cell}
+  volumes: &ros-vols
+    - ./src:/ws/src
+    - ./config:/config:ro
+    - ./calibrations:/calibrations
+
+x-ros-gui: &ros-gui
+  <<: *ros
+  environment:
+    <<: *ros-env
+    DISPLAY: ${DISPLAY:-:0}
+    QT_X11_NO_MITSHM: 1
+    XAUTHORITY: /tmp/.docker.xauth
+  volumes:
+    - ./src:/ws/src
+    - ./config:/config:ro
+    - ./calibrations:/calibrations
+    - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    - /tmp/.docker.xauth:/tmp/.docker.xauth:rw
+
+services:
+
+  # ======================================================================
+  # profile: ur
+  # ======================================================================
+  ur:
+    <<: *ros
+    profiles: [ur]
+    container_name: ${CELL_NAME:-cell}_ur
+    image: ros2-essentials/ur:${TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/modules/ur/Dockerfile
+      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
+              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+    command: >
+      ros2 launch ur_robot_driver ur_control.launch.py
+        ur_type:=${UR_TYPE:-ur5e}
+        robot_ip:=${ROBOT_IP:-192.168.1.102}
+        launch_rviz:=false
+        headless_mode:=${UR_HEADLESS:-true}
+        kinematics_params_file:=${UR_KINEMATICS_FILE:-/config/ur_kinematics.yaml}
+
+  # One-shot: pull the arm's factory DH deltas off the controller. Run ONCE
+  # per arm, before calibrating. Uncorrected FK puts mm-level error straight
+  # into the hand-eye extrinsic, and hand-eye cannot separate the two.
+  ur-kinematics:
+    <<: *ros
+    profiles: [oneshot]
+    image: ros2-essentials/ur:${TAG:-dev}
+    volumes:
+      - ./src:/ws/src
+      - ./config:/config:rw
+      - ./calibrations:/calibrations
+    command: >
+      ros2 launch ur_calibration calibration_correction.launch.py
+        robot_ip:=${ROBOT_IP:-192.168.1.102}
+        target_filename:=/config/ur_kinematics.yaml
+
+  moveit:
+    <<: *ros-gui
+    profiles: [moveit]
+    container_name: ${CELL_NAME:-cell}_moveit
+    image: ros2-essentials/ur:${TAG:-dev}
+    command: >
+      ros2 launch ur_moveit_config ur_moveit.launch.py
+        ur_type:=${UR_TYPE:-ur5e}
+        launch_rviz:=${MOVEIT_RVIZ:-true}
+
+  # ======================================================================
+  # profile: camera
+  # ======================================================================
+  camera:
+    <<: *ros
+    profiles: [camera]
+    container_name: ${CELL_NAME:-cell}_camera
+    image: ros2-essentials/realsense:${TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/modules/realsense/Dockerfile
+      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
+              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+    privileged: true
+    volumes:
+      - ./src:/ws/src
+      - ./config:/config:ro
+      - ./calibrations:/calibrations
+      - /dev:/dev
+    command: >
+      ros2 launch realsense2_camera rs_launch.py
+        camera_name:=${CAMERA_NAME:-camera}
+        serial_no:=${CAMERA_SERIAL:-}
+        rgb_camera.profile:=${RGB_PROFILE:-1280x720x30}
+        enable_depth:=${ENABLE_DEPTH:-true}
+        align_depth.enable:=${ALIGN_DEPTH:-true}
+        pointcloud.enable:=false
+
+  # ======================================================================
+  # profile: calib   (producer -- runs a few times a year, interactive)
+  # ======================================================================
+  tracker:
+    <<: *ros-gui
+    profiles: [calib]
+    container_name: ${CELL_NAME:-cell}_tracker
+    image: ros2-essentials/calibration:${TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/modules/calibration/Dockerfile
+      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
+              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+    command: >
+      ros2 launch handeye_bringup tracker.launch.py
+        marker_id:=${MARKER_ID:-582}
+        marker_size:=${MARKER_SIZE:-0.05}
+        marker_frame:=${MARKER_FRAME:-aruco_marker_frame}
+        camera_optical_frame:=${CAMERA_OPTICAL_FRAME:-camera_color_optical_frame}
+        image_topic:=${IMAGE_TOPIC:-/camera/camera/color/image_raw}
+        camera_info_topic:=${CAMERA_INFO_TOPIC:-/camera/camera/color/camera_info}
+
+  handeye:
+    <<: *ros-gui
+    profiles: [calib]
+    container_name: ${CELL_NAME:-cell}_handeye
+    image: ros2-essentials/calibration:${TAG:-dev}
+    command: >
+      ros2 launch easy_handeye2 calibrate.launch.py
+        calibration_type:=${CALIB_TYPE:-eye_on_base}
+        name:=${CALIB_NAME:-default_eob}
+        robot_base_frame:=${ROBOT_BASE_FRAME:-base_link}
+        robot_effector_frame:=${ROBOT_EE_FRAME:-tool0}
+        tracking_base_frame:=${CAMERA_OPTICAL_FRAME:-camera_color_optical_frame}
+        tracking_marker_frame:=${MARKER_FRAME:-aruco_marker_frame}
+        freehand_robot_movement:=${FREEHAND:-true}
+
+  # Offline smoke test. No arm, no camera, no marker.
+  handeye-demo:
+    <<: *ros-gui
+    profiles: [demo]
+    image: ros2-essentials/calibration:${TAG:-dev}
+    command: >
+      ros2 launch easy_handeye2_demo calibrate.launch.py
+        calibration_type:=${CALIB_TYPE:-eye_on_base}
+
+  # ======================================================================
+  # profile: cell   (consumer -- runs on every boot of every stack)
+  # ======================================================================
+  # Reads calibrations/<cell>/extrinsics.yaml and publishes it as static TF.
+  # Deliberately NOT easy_handeye2's publish.launch.py: one source of truth
+  # for every extrinsic in the cell, readable by MoveIt, rviz, and the
+  # ZMQ sidecars alike, and versioned in git.
+  cell:
+    <<: *ros
+    profiles: [cell]
+    container_name: ${CELL_NAME:-cell}_extrinsics
+    image: ros2-essentials/base:${TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/base/Dockerfile
+      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}",
+              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+    command: >
+      ros2 launch cell_description extrinsics.launch.py
+        extrinsics_file:=/calibrations/${CELL_NAME:-unnamed-cell}/extrinsics.yaml
+
+  # ======================================================================
+  # profile: perception
+  # ======================================================================
+  bridge:
+    <<: *ros
+    profiles: [perception]
+    container_name: ${CELL_NAME:-cell}_bridge
+    image: ros2-essentials/perception:${TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/modules/perception/Dockerfile
+      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
+              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+    command: >
+      ros2 launch ros_zmq_bridge bridge.launch.py
+        bind_address:=${BRIDGE_BIND:-tcp://0.0.0.0:5680}
+        color_topic:=${IMAGE_TOPIC:-/camera/camera/color/image_raw}
+        depth_topic:=${DEPTH_TOPIC:-/camera/camera/aligned_depth_to_color/image_raw}
+        camera_info_topic:=${CAMERA_INFO_TOPIC:-/camera/camera/color/camera_info}
+        base_frame:=${ROBOT_BASE_FRAME:-base_link}
+        ee_frame:=${ROBOT_EE_FRAME:-tool0}
+
+  # ======================================================================
+  # profile: viz / shell
+  # ======================================================================
+  rviz:
+    <<: *ros-gui
+    profiles: [viz]
+    image: ros2-essentials/tools:${TAG:-dev}
+    build:
+      context: .
+      dockerfile: docker/modules/tools/Dockerfile
+      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
+              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+    command: rviz2 -d /config/rviz/${RVIZ_CONFIG:-cell.rviz}
+
+  foxglove:
+    <<: *ros
+    profiles: [viz]
+    image: ros2-essentials/tools:${TAG:-dev}
+    command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
+
+  shell:
+    <<: *ros-gui
+    profiles: [shell]
+    image: ros2-essentials/tools:${TAG:-dev}
+    command: bash

@@ -1,0 +1,13 @@
+# Build context is the repo root (the Dockerfiles COPY from docker/ and repos/).
+# Keep the context small so a rebuild is not gated on shipping bag files.
+.git
+build/
+install/
+log/
+__pycache__/
+*.pyc
+calibrations/
+config/rviz/
+cells/
+*.md
+.env

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Build a source overlay into /opt/overlay from a .repos file. Image-build only.
+# usage: overlay-build /tmp/foo.repos
+set -euo pipefail
+REPOS_FILE="$1"
+source "/opt/ros/${ROS_DISTRO}/setup.bash"
+mkdir -p "${OVERLAY_WS}/src"
+cd "${OVERLAY_WS}"
+vcs import src < "${REPOS_FILE}"
+sudo apt-get update
+rosdep update --rosdistro "${ROS_DISTRO}"
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+rm -rf "${OVERLAY_WS}/build" "${OVERLAY_WS}/log"
+sudo rm -rf /var/lib/apt/lists/*

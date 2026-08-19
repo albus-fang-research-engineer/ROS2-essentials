@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Pin Cyclone to one interface. On a bench with a robot NIC and a lab NIC,
+  leaving this to autodetection means discovery intermittently binds the wrong
+  one and nodes stop seeing each other for no visible reason.
+
+  Set NetworkInterfaceAddress to the interface facing the OTHER ROS machines
+  (usually the lab LAN), not the robot's private link.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface autodetermine="true" priority="default" multicast="default" />
+        <!-- Replace the line above with an explicit interface once known: -->
+        <!-- <NetworkInterface name="eno1" priority="default" multicast="default" /> -->
+      </Interfaces>
+      <AllowMulticast>default</AllowMulticast>
+      <MaxMessageSize>65500B</MaxMessageSize>
+    </General>
+    <Internal>
+      <!-- Large image messages over loopback benefit from a bigger buffer. -->
+      <MinimumSocketReceiveBufferSize>10MB</MinimumSocketReceiveBufferSize>
+    </Internal>
+    <Tracing>
+      <Verbosity>warning</Verbosity>
+      <OutputFile>stderr</OutputFile>
+    </Tracing>
+  </Domain>
+</CycloneDDS>

@@ -1,0 +1,18 @@
+# Copy to calibrations/<cell-name>/extrinsics.yaml and fill in from a real
+# calibration. scripts/promote_calibration.py writes this format for you.
+#
+# Rotation is a quaternion in xyzw order. `rpy:` (radians) is also accepted.
+# `source:` is provenance and is not optional in practice -- six months from
+# now you will want to know which run produced a number you no longer trust.
+
+extrinsics:
+  - parent: base_link
+    child: camera_color_optical_frame
+    translation: {x: 0.0, y: 0.0, z: 0.0}
+    rotation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+    source: PLACEHOLDER -- not calibrated
+
+  # Eye-in-hand results go the other way round:
+  # - parent: tool0
+  #   child: camera_color_optical_frame
+  #   ...

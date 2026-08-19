@@ -1,0 +1,6 @@
+# Intentionally empty. The perception module ships only the ROS<->ZMQ bridge,
+# which lives in src/ros_zmq_bridge and is bind-mounted, not baked in.
+#
+# If you later need a source-built ROS perception package here, add it and
+# wire `overlay-build /tmp/perception.repos` into docker/modules/perception.
+repositories: {}

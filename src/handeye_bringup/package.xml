@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>handeye_bringup</name>
+  <version>0.1.0</version>
+  <description>
+    Cell-specific glue for hand-eye calibration: marker tracker bring-up with
+    your frame names and topics baked in, plus a full calibrate stack.
+  </description>
+  <maintainer email="albus@example.com">Albus</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>aruco_ros</exec_depend>
+  <exec_depend>easy_handeye2</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

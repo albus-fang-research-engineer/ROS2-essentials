@@ -1,0 +1,16 @@
+# colcon artefacts from the bind-mounted workspace
+build/
+install/
+log/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# machine-local symlink created by scripts/setup_cell.sh
+/.env
+
+# extracted from the controller, machine-specific, regenerate with `make kinematics`
+/config/ur_kinematics.yaml
+
+# NOT ignored: calibrations/. Calibration results are data. Commit them,
+# date-stamp them, never overwrite them.

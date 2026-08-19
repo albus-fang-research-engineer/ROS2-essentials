@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Build the bind-mounted user workspace at /ws.
+set -euo pipefail
+source "/opt/ros/${ROS_DISTRO}/setup.bash"
+[ -f "${OVERLAY_WS}/install/setup.bash" ] && source "${OVERLAY_WS}/install/setup.bash"
+cd "${WS}"
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release "$@"
+echo "built -> source ${WS}/install/setup.bash"
