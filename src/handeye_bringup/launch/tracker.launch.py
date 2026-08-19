@@ -22,8 +22,13 @@ ARGS = [
      'rejects them, and upstream docs still show the ROS 1 style.'),
     ('image_topic', '/camera/camera/color/image_raw', 'Rectified colour image.'),
     ('camera_info_topic', '/camera/camera/color/camera_info', 'Intrinsics.'),
-    ('corner_refinement', 'LINES',
-     'NONE | HARRIS | LINES | SUBPIX. LINES is a good default for calibration.'),
+    ('detection_mode', '',
+     'DM_NORMAL | DM_FAST | DM_VIDEO_FAST. Empty = the node default (normal). '
+     'NOTE: this node declares detection_mode, NOT corner_refinement -- '
+     'passing an undeclared parameter makes the node refuse to start.'),
+    ('min_marker_size', '0.02',
+     'Minimum marker area as a fraction of the image. Raise it to reject '
+     'far-away false positives.'),
 ]
 
 
@@ -45,7 +50,8 @@ def generate_launch_description():
             'reference_frame': LaunchConfiguration('camera_optical_frame'),
             'camera_frame': LaunchConfiguration('camera_optical_frame'),
             'marker_frame': LaunchConfiguration('marker_frame'),
-            'corner_refinement': LaunchConfiguration('corner_refinement'),
+            'detection_mode': LaunchConfiguration('detection_mode'),
+            'min_marker_size': LaunchConfiguration('min_marker_size'),
         }],
         remappings=[
             ('/camera_info', LaunchConfiguration('camera_info_topic')),

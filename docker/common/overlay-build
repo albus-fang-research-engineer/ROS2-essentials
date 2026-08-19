@@ -10,6 +10,12 @@ vcs import src < "${REPOS_FILE}"
 sudo apt-get update
 rosdep update --rosdistro "${ROS_DISTRO}"
 rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+# NOT --symlink-install here. It makes install/ a set of symlinks pointing
+# into build/, so deleting build/ to slim the image leaves dangling links and
+# every shell prints "not found: .../local_setup.bash" -- and easy_handeye2's
+# python modules never land on PYTHONPATH, so the GUI fails to import.
+# ws-build DOES use --symlink-install, correctly: that workspace is
+# bind-mounted and edited, and its build/ is never deleted.
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 rm -rf "${OVERLAY_WS}/build" "${OVERLAY_WS}/log"
 sudo rm -rf /var/lib/apt/lists/*
