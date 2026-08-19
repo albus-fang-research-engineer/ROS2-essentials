@@ -14,3 +14,6 @@ __pycache__/
 
 # NOT ignored: calibrations/. Calibration results are data. Commit them,
 # date-stamp them, never overwrite them.
+
+# patch files live outside the repo
+*.patch
