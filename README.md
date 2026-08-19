@@ -305,6 +305,13 @@ not surface until a grasp misses.
   build `FROM ros:noetic-ros-base`. That is why every host-facing knob here is
   `R2E_*` (`R2E_DISTRO`, `R2E_DOMAIN_ID`, `R2E_RMW`, `R2E_CYCLONEDDS_URI`) and
   only becomes `ROS_DISTRO` etc. inside the container. `make doctor` flags it.
+- **rviz resolves meshes locally, not over DDS.** `robot_state_publisher` in
+  the `ur` service latches the URDF, so rviz gets the *text* wherever it runs
+  — but every `package://ur_description/...` URI in that text is looked up in
+  the ament index of rviz's own container. The `tools` image is not a UR
+  image, so `ur_description` has to be installed there too or rviz logs
+  `Package [ur_description] does not exist` for every link and shows an empty
+  RobotModel. Same trap for any other robot whose description you view.
 - **These images are local-only.** Compose responds to a missing image by
   trying to pull it, so a failed build surfaces later as `pull access denied
   for ros2-essentials/...`. The `require-*` guards in the Makefile catch this
