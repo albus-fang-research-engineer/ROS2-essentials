@@ -1,0 +1,132 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /TF1
+        - /RobotModel1
+      Splitter Ratio: 0.5
+    Tree Height: 700
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Name: root
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.25
+      Plane Cell Count: 12
+      Color: 160; 160; 164
+      Reference Frame: <Fixed Frame>
+      Value: true
+
+    # The arm. robot_state_publisher inside the `ur` service latches
+    # /robot_description; if this display is empty, that service is not up.
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Alpha: 1
+      Visual Enabled: true
+      Collision Enabled: false
+      Value: true
+
+    # The whole point of this config: watch the camera subtree attach to the
+    # robot after the calibration is promoted. Before promotion, camera_link
+    # is a disconnected island and TF shows it detached.
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Show Axes: true
+      Show Arrows: false
+      Marker Scale: 0.25
+      Update Interval: 0
+      Frame Timeout: 15
+      Value: true
+
+    - Class: rviz_default_plugins/Image
+      Name: ColorImage
+      Enabled: true
+      Topic:
+        Value: /camera/camera/color/image_raw
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+      Max Value: 1
+      Min Value: 0
+      Normalize Range: true
+      Value: true
+
+    # Annotated detector output. A recognised marker gets drawn on; nothing
+    # drawn means wrong dictionary, wrong id, or min_marker_size rejecting it.
+    - Class: rviz_default_plugins/Image
+      Name: ArucoResult
+      Enabled: false
+      Topic:
+        Value: /aruco_single/result
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+      Value: false
+
+    # Off by default: the camera service launches with pointcloud.enable:=false
+    # because the cloud is expensive and calibration does not need it.
+    - Class: rviz_default_plugins/PointCloud2
+      Name: DepthCloud
+      Enabled: false
+      Topic:
+        Value: /camera/camera/depth/color/points
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+      Alpha: 1
+      Size (m): 0.003
+      Style: Points
+      Color Transformer: RGB8
+      Position Transformer: XYZ
+      Decay Time: 0
+      Value: false
+
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: base_link
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 2.2
+      Focal Point:
+        X: 0.2
+        Y: 0
+        Z: 0.3
+      Pitch: 0.4
+      Yaw: 2.4
+      Target Frame: <Fixed Frame>
+      Near Clip Distance: 0.01
+    Saved: ~
+Window Geometry:
+  Height: 900
+  Width: 1400
+  Displays:
+    collapsed: false
+  Views:
+    collapsed: false

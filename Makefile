@@ -134,6 +134,29 @@ shell: require-tools ## Interactive shell in the tools image
 kinematics: require-ur ## ONE-SHOT: pull the arm's factory DH deltas into config/
 	docker compose --profile oneshot run --rm ur-kinematics
 
+.PHONY: marker
+marker: ## Printable marker sheet: make marker SIZE=0.06 [ID=42] [DICT=ARUCO_ORIGINAL]
+	@test -n "$(SIZE)" || (echo "usage: make marker SIZE=<black square edge in metres>"; exit 1)
+	@if python3 -c 'import cv2' 2>/dev/null; then \
+		scripts/make_marker.py --size $(SIZE) $(if $(ID),--id $(ID),) \
+			$(if $(DICT),--dict $(DICT),) --out marker_sheet.png; \
+	else \
+		echo "no host opencv; generating inside the calibration image"; \
+		docker compose --profile calib run --rm \
+			-v "$(PWD)/scripts:/scripts:ro" tracker \
+			python3 /scripts/make_marker.py --size $(SIZE) \
+				$(if $(ID),--id $(ID),) $(if $(DICT),--dict $(DICT),) \
+				--out /ws/marker_sheet.png; \
+	fi
+
+.PHONY: markers-seen
+markers-seen: require-calibration ## List every marker id the camera can currently see
+	docker compose --profile calib run --rm tracker bash -lc '\
+	  ros2 run aruco_ros marker_publisher --ros-args \
+	    -p image_is_rectified:=true -p marker_size:=$(or $(SIZE),0.05) \
+	    -r /camera_info:=$(CAMERA_INFO_TOPIC) -r /image:=$(IMAGE_TOPIC) & \
+	  sleep 5; ros2 topic echo --once /aruco_marker_publisher/markers'
+
 .PHONY: calibrate
 calibrate: require-calibration ## Interactive hand-eye calibration (needs ur + camera up)
 	docker compose --profile calib up

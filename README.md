@@ -142,10 +142,46 @@ docker compose --profile shell run --rm shell bash -lc \
 
 ### 3. Mount the target, then confirm it is detected
 
-Print the marker. Mount it **rigidly** — a marker that flexes relative to the
-flange is unrecoverable noise. Measure the printed black square with calipers
-and put that in `MARKER_SIZE`; printer scaling lies, and a 2% size error is a
-2% range bias that no number of extra samples will average away.
+You need two numbers: which **id** to track, and the **physical size** of the
+black square. Neither can be guessed; neither has to be.
+
+This `aruco_ros` build exposes no `dictionary` parameter, so the dictionary is
+fixed at the vendored library's default — and a marker from the wrong one is
+never detected, silently, with no warning of any kind.
+
+**If you already have a marker or board**, ask the detector what it sees rather
+than guessing. Every id it reports is by definition in the right dictionary:
+
+```bash
+make markers-seen SIZE=0.05
+```
+
+**If you don't**, print a candidate sheet: the same id rendered from each
+plausible dictionary, two columns, sized for A4/Letter.
+
+```bash
+make marker SIZE=0.06        # writes marker_sheet.png
+```
+
+Print at **100% / Actual size**, never "fit to page". Check the 100 mm bar with
+a ruler before anything else — if it isn't 100 mm the printer rescaled and every
+marker on the page is the wrong size. Then hold the sheet up with the tracker
+running: exactly one tile gets outlined in `/aruco_single/result`. That
+identifies your dictionary and confirms the id is valid in it.
+
+Print the real target from that dictionary, larger — a bigger marker is a
+better-conditioned pose estimate:
+
+```bash
+make marker SIZE=0.10 ID=42 DICT=ARUCO_ORIGINAL
+```
+
+Mount it **rigidly**. A marker that flexes relative to the flange is
+unrecoverable noise — glue or bolt it to a flat plate, don't tape paper to
+something curved. Then measure its black square with calipers and put that
+value, in metres, in `MARKER_SIZE`. Not the nominal `SIZE` you asked for: what
+the printer actually produced. A 2% size error is a 2% range bias that no number
+of extra samples will average away.
 
 ```bash
 docker compose --profile calib up tracker
