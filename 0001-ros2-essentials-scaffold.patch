@@ -1,0 +1,2491 @@
+From 3dd208071039a2abd4bb9be0b6c411b76a73906d Mon Sep 17 00:00:00 2001
+From: Albus <albus@example.com>
+Date: Wed, 19 Aug 2026 00:06:17 +0000
+Subject: [PATCH] Scaffold ros2-essentials: layered images, profile-based
+ cells, hand-eye calibration
+
+Structure
+  docker/base            thin: distro, CyclomeDDS, colcon, UID-matched user
+  docker/base-gui        + X11/rviz/rqt, so headless modules skip ~1.5GB of Qt
+  docker/base-cuda       CUDA devel + ROS (see version caveat in the file)
+  docker/modules/*       ur, realsense, calibration, tools, perception
+
+Module boundaries are compose profiles, and a machine's identity is the
+COMPOSE_PROFILES line in cells/<hostname>.env. Same repo on every bench.
+
+The calibration image inherits from base-gui rather than from the UR or
+RealSense images because easy_handeye2 consumes TF only -- it never links
+against either driver.
+
+Calibration is split producer/consumer: the calib profile writes a .calib,
+scripts/promote_calibration.py turns it into calibrations/<cell>/extrinsics.yaml,
+and cell_description publishes that as static TF on every boot. Results are
+committed, date-stamped, and never overwritten.
+
+src/ros_zmq_bridge is the single node that speaks ROS on behalf of the CUDA
+sidecars, keeping rclpy out of their dependency graphs.
+---
+ .dockerignore                                 |  13 +
+ .gitignore                                    |  16 ++
+ Makefile                                      | 139 ++++++++++
+ README.md                                     | 142 +++++++++++
+ calibrations/README.md                        |  26 ++
+ cells/README.md                               |  15 ++
+ cells/example-ur5e-01.env                     |  71 ++++++
+ config/cyclonedds.xml                         |  30 +++
+ config/rviz/.gitkeep                          |   0
+ docker-compose.yml                            | 239 ++++++++++++++++++
+ docker/base-cuda/Dockerfile                   |  66 +++++
+ docker/base-gui/Dockerfile                    |  33 +++
+ docker/base/Dockerfile                        |  62 +++++
+ docker/common/entrypoint.sh                   |  17 ++
+ docker/common/overlay-build                   |  15 ++
+ docker/common/ws-build                        |   8 +
+ docker/modules/calibration/Dockerfile         |  36 +++
+ docker/modules/perception/Dockerfile          |  32 +++
+ docker/modules/realsense/Dockerfile           |  30 +++
+ docker/modules/tools/Dockerfile               |  28 ++
+ docker/modules/ur/Dockerfile                  |  30 +++
+ repos/calibration.repos                       |  15 ++
+ repos/perception.repos                        |   6 +
+ scripts/doctor.sh                             |  54 ++++
+ scripts/promote_calibration.py                | 199 +++++++++++++++
+ scripts/setup_cell.sh                         |  32 +++
+ scripts/x11_setup.sh                          |  14 +
+ .../cell_description/__init__.py              |   0
+ .../cell_description/extrinsics_publisher.py  | 144 +++++++++++
+ .../config/extrinsics.example.yaml            |  18 ++
+ .../launch/extrinsics.launch.py               |  25 ++
+ src/cell_description/package.xml              |  23 ++
+ .../resource/cell_description                 |   0
+ src/cell_description/setup.cfg                |   4 +
+ src/cell_description/setup.py                 |  28 ++
+ .../handeye_bringup/__init__.py               |   0
+ .../launch/calibrate.launch.py                |  81 ++++++
+ src/handeye_bringup/launch/tracker.launch.py  |  56 ++++
+ src/handeye_bringup/package.xml               |  21 ++
+ src/handeye_bringup/resource/handeye_bringup  |   0
+ src/handeye_bringup/setup.cfg                 |   4 +
+ src/handeye_bringup/setup.py                  |  23 ++
+ src/ros_zmq_bridge/launch/bridge.launch.py    |  34 +++
+ src/ros_zmq_bridge/package.xml                |  24 ++
+ src/ros_zmq_bridge/resource/ros_zmq_bridge    |   0
+ src/ros_zmq_bridge/ros_zmq_bridge/__init__.py |   0
+ .../ros_zmq_bridge/bridge_node.py             | 204 +++++++++++++++
+ src/ros_zmq_bridge/setup.cfg                  |   4 +
+ src/ros_zmq_bridge/setup.py                   |  27 ++
+ 49 files changed, 2088 insertions(+)
+ create mode 100644 .dockerignore
+ create mode 100644 .gitignore
+ create mode 100644 Makefile
+ create mode 100644 README.md
+ create mode 100644 calibrations/README.md
+ create mode 100644 cells/README.md
+ create mode 100644 cells/example-ur5e-01.env
+ create mode 100644 config/cyclonedds.xml
+ create mode 100644 config/rviz/.gitkeep
+ create mode 100644 docker-compose.yml
+ create mode 100644 docker/base-cuda/Dockerfile
+ create mode 100644 docker/base-gui/Dockerfile
+ create mode 100644 docker/base/Dockerfile
+ create mode 100755 docker/common/entrypoint.sh
+ create mode 100755 docker/common/overlay-build
+ create mode 100755 docker/common/ws-build
+ create mode 100644 docker/modules/calibration/Dockerfile
+ create mode 100644 docker/modules/perception/Dockerfile
+ create mode 100644 docker/modules/realsense/Dockerfile
+ create mode 100644 docker/modules/tools/Dockerfile
+ create mode 100644 docker/modules/ur/Dockerfile
+ create mode 100644 repos/calibration.repos
+ create mode 100644 repos/perception.repos
+ create mode 100755 scripts/doctor.sh
+ create mode 100755 scripts/promote_calibration.py
+ create mode 100755 scripts/setup_cell.sh
+ create mode 100755 scripts/x11_setup.sh
+ create mode 100644 src/cell_description/cell_description/__init__.py
+ create mode 100644 src/cell_description/cell_description/extrinsics_publisher.py
+ create mode 100644 src/cell_description/config/extrinsics.example.yaml
+ create mode 100644 src/cell_description/launch/extrinsics.launch.py
+ create mode 100644 src/cell_description/package.xml
+ create mode 100644 src/cell_description/resource/cell_description
+ create mode 100644 src/cell_description/setup.cfg
+ create mode 100644 src/cell_description/setup.py
+ create mode 100644 src/handeye_bringup/handeye_bringup/__init__.py
+ create mode 100644 src/handeye_bringup/launch/calibrate.launch.py
+ create mode 100644 src/handeye_bringup/launch/tracker.launch.py
+ create mode 100644 src/handeye_bringup/package.xml
+ create mode 100644 src/handeye_bringup/resource/handeye_bringup
+ create mode 100644 src/handeye_bringup/setup.cfg
+ create mode 100644 src/handeye_bringup/setup.py
+ create mode 100644 src/ros_zmq_bridge/launch/bridge.launch.py
+ create mode 100644 src/ros_zmq_bridge/package.xml
+ create mode 100644 src/ros_zmq_bridge/resource/ros_zmq_bridge
+ create mode 100644 src/ros_zmq_bridge/ros_zmq_bridge/__init__.py
+ create mode 100644 src/ros_zmq_bridge/ros_zmq_bridge/bridge_node.py
+ create mode 100644 src/ros_zmq_bridge/setup.cfg
+ create mode 100644 src/ros_zmq_bridge/setup.py
+
+diff --git a/.dockerignore b/.dockerignore
+new file mode 100644
+index 0000000..2926d66
+--- /dev/null
++++ b/.dockerignore
+@@ -0,0 +1,13 @@
++# Build context is the repo root (the Dockerfiles COPY from docker/ and repos/).
++# Keep the context small so a rebuild is not gated on shipping bag files.
++.git
++build/
++install/
++log/
++__pycache__/
++*.pyc
++calibrations/
++config/rviz/
++cells/
++*.md
++.env
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..08d130d
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,16 @@
++# colcon artefacts from the bind-mounted workspace
++build/
++install/
++log/
++__pycache__/
++*.pyc
++*.egg-info/
++
++# machine-local symlink created by scripts/setup_cell.sh
++/.env
++
++# extracted from the controller, machine-specific, regenerate with `make kinematics`
++/config/ur_kinematics.yaml
++
++# NOT ignored: calibrations/. Calibration results are data. Commit them,
++# date-stamp them, never overwrite them.
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 0000000..f7e8944
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,139 @@
++# ===========================================================================
++# ros2-essentials
++#
++# Compose does not order builds by FROM dependency, so image builds go through
++# here: base -> base-gui -> modules. Everything else is convenience.
++# ===========================================================================
++
++SHELL := /bin/bash
++ROS_DISTRO ?= humble
++TAG        ?= dev
++HOST_UID   := $(shell id -u)
++HOST_GID   := $(shell id -g)
++CELL       ?= $(shell hostname)
++
++BUILD_ARGS = --build-arg ROS_DISTRO=$(ROS_DISTRO) \
++             --build-arg TAG=$(TAG) \
++             --build-arg HOST_UID=$(HOST_UID) \
++             --build-arg HOST_GID=$(HOST_GID)
++
++.DEFAULT_GOAL := help
++
++# --- setup ------------------------------------------------------------------
++
++.PHONY: setup
++setup: ## First-run: link .env to this machine's cell config, prep X11
++	@scripts/setup_cell.sh $(CELL)
++	@scripts/x11_setup.sh
++
++.PHONY: x11
++x11: ## Refresh the X11 cookie (once per login session)
++	@scripts/x11_setup.sh
++
++# --- images -----------------------------------------------------------------
++
++.PHONY: build
++build: base base-gui ur realsense calibration tools ## Build every image, in order
++
++.PHONY: base
++base: ## Thin base: distro + cyclone + colcon + user
++	docker build $(BUILD_ARGS) -f docker/base/Dockerfile \
++		-t ros2-essentials/base:$(TAG) .
++
++.PHONY: base-gui
++base-gui: base ## base + X11 + rviz/rqt
++	docker build $(BUILD_ARGS) -f docker/base-gui/Dockerfile \
++		-t ros2-essentials/base-gui:$(TAG) .
++
++.PHONY: base-cuda
++base-cuda: ## CUDA devel + ROS 2 (see the version note in the Dockerfile)
++	docker build $(BUILD_ARGS) -f docker/base-cuda/Dockerfile \
++		-t ros2-essentials/base-cuda:$(TAG) .
++
++.PHONY: ur realsense calibration tools perception
++ur: base ## UR driver + MoveIt
++	docker build $(BUILD_ARGS) -f docker/modules/ur/Dockerfile \
++		-t ros2-essentials/ur:$(TAG) .
++
++realsense: base ## RealSense driver + image pipeline
++	docker build $(BUILD_ARGS) -f docker/modules/realsense/Dockerfile \
++		-t ros2-essentials/realsense:$(TAG) .
++
++calibration: base-gui ## easy_handeye2 + marker detectors
++	docker build $(BUILD_ARGS) -f docker/modules/calibration/Dockerfile \
++		-t ros2-essentials/calibration:$(TAG) .
++
++tools: base-gui ## rviz, rosbag, foxglove, plotjuggler
++	docker build $(BUILD_ARGS) -f docker/modules/tools/Dockerfile \
++		-t ros2-essentials/tools:$(TAG) .
++
++perception: base ## ROS side of the ZMQ perception boundary
++	docker build $(BUILD_ARGS) -f docker/modules/perception/Dockerfile \
++		-t ros2-essentials/perception:$(TAG) .
++
++# --- workspace --------------------------------------------------------------
++
++.PHONY: ws
++ws: ## colcon build the bind-mounted workspace in src/
++	docker compose --profile shell run --rm shell ws-build
++
++.PHONY: ws-clean
++ws-clean: ## Remove colcon artefacts from src/ (they are gitignored, not tracked)
++	rm -rf build install log
++
++# --- running ----------------------------------------------------------------
++
++.PHONY: up down ps logs
++up: ## Bring up whatever COMPOSE_PROFILES says this machine runs
++	docker compose up -d
++	@docker compose ps
++
++down: ## Stop everything, all profiles
++	docker compose --profile ur --profile camera --profile calib \
++	               --profile cell --profile viz --profile perception \
++	               --profile moveit --profile shell --profile demo down
++
++ps: ## Running services
++	docker compose ps
++
++logs: ## Tail all logs
++	docker compose logs -f --tail=100
++
++.PHONY: shell
++shell: ## Interactive shell in the tools image
++	docker compose --profile shell run --rm shell bash
++
++# --- calibration workflow ---------------------------------------------------
++
++.PHONY: kinematics
++kinematics: ## ONE-SHOT: pull the arm's factory DH deltas into config/
++	docker compose --profile oneshot run --rm ur-kinematics
++
++.PHONY: calibrate
++calibrate: ## Interactive hand-eye calibration (needs ur + camera already up)
++	docker compose --profile calib up
++
++.PHONY: promote
++promote: ## Promote a .calib into the cell extrinsics: make promote CALIB=path/to.calib
++	@test -n "$(CALIB)" || (echo "usage: make promote CALIB=<path to .calib>"; exit 1)
++	scripts/promote_calibration.py --calib "$(CALIB)" --cell "$(CELL)"
++
++.PHONY: demo
++demo: ## Offline calibration smoke test, no hardware
++	docker compose --profile demo up handeye-demo
++
++# --- introspection ----------------------------------------------------------
++
++.PHONY: tf
++tf: ## Dump the current TF tree to /tmp
++	docker compose --profile shell run --rm shell \
++		bash -lc 'cd /tmp && ros2 run tf2_tools view_frames'
++
++.PHONY: doctor
++doctor: ## Sanity-check the host setup
++	@scripts/doctor.sh
++
++.PHONY: help
++help: ## Show this help
++	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
++		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..5543826
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,142 @@
++# ROS2-essentials
++
++A single repo that runs on every machine with hardware attached to it. Same
++files on the manipulator bench and the GPU box; the only difference is which
++**profiles** that machine turns on.
++
++```
++docker/base            distro + CyclomeDDS + colcon + UID-matched user
++  ├── base-gui         + X11, rviz, rqt
++  │     ├── calibration    easy_handeye2, aruco/apriltag/charuco detectors
++  │     └── tools          rviz, rosbag, foxglove, plotjuggler
++  ├── ur               UR driver, ur_calibration, MoveIt
++  ├── realsense        librealsense + image pipeline
++  └── perception       the ROS<->ZMQ bridge only (no models, no CUDA)
++docker/base-cuda       CUDA devel + ROS, for when a node genuinely needs both
++```
++
++## Quick start
++
++```bash
++git clone git@github.com:albus-fang-research-engineer/ROS2-essentials.git
++cd ROS2-essentials
++
++make setup          # links .env -> cells/$(hostname).env, preps X11 cookie
++$EDITOR cells/$(hostname).env    # robot IP, camera serial, COMPOSE_PROFILES
++make doctor         # checks the things that waste the most time
++make build          # base -> base-gui -> modules, in order
++make ws             # colcon build the packages in src/
++make up             # starts whatever COMPOSE_PROFILES lists
++```
++
++Verify the calibration stack with no hardware at all:
++
++```bash
++make demo
++```
++
++## The three ideas this is built on
++
++**Image boundaries follow hardware, not dependencies.** `easy_handeye2` consumes
++TF only — it never links against the UR driver or the RealSense SDK. So the
++calibration image inherits from `base-gui`, not from either hardware image.
++Most ROS modules talk over DDS rather than over shared libraries, which is what
++makes this possible; the exceptions (anything using `ros2_control` hardware
++interfaces) do need to share an image with their driver.
++
++**Profiles are machine identity.** `cells/<hostname>.env` sets
++`COMPOSE_PROFILES`. The manipulator bench runs `ur,camera,cell`; the GPU box
++runs `perception,cell`; on calibration day the bench runs
++`ur,camera,calib,viz`. `docker compose up` on any machine does the right thing
++with no arguments.
++
++**Calibration has a producer and a consumer, and they should not be the same
++stack.** The producer (`calib` profile) runs a few times a year, interactively,
++with a GUI and the whole rig powered up. The consumer (`cell` profile) runs on
++every boot of everything and needs seven numbers. `scripts/promote_calibration.py`
++is the deliberate, auditable step between them.
++
++## Layout
++
++| Path | What it is |
++|---|---|
++| `docker/base*/` | Base images. Change here, rebuild everything. |
++| `docker/modules/` | One Dockerfile per hardware or task module. |
++| `docker/common/` | `entrypoint.sh` (workspace layering), build helpers. |
++| `docker-compose.yml` | Every service. Module boundary = profile name. |
++| `cells/` | One `.env` per physical machine. Committed. |
++| `calibrations/` | Per-cell extrinsics + archived `.calib`. **Committed.** |
++| `config/` | Cyclone XML, rviz configs, extracted UR kinematics. |
++| `repos/` | `.repos` files for source-built overlays. |
++| `src/` | Your ROS packages, bind-mounted into every container. |
++| `scripts/` | Host-side: setup, X11, doctor, calibration promotion. |
++
++### Packages in `src/`
++
++- **`cell_description`** — reads `calibrations/<cell>/extrinsics.yaml` and
++  publishes every calibrated transform in the cell as static TF. The single
++  source of truth that MoveIt, rviz, and the ZMQ sidecars all agree on.
++- **`handeye_bringup`** — marker tracker with your topics and frames baked in,
++  plus a combined tracker + `easy_handeye2` launch.
++- **`ros_zmq_bridge`** — the one node that speaks ROS on behalf of the CUDA
++  sidecars. Serves synchronised colour + depth + intrinsics + TF snapshots over
++  ZMQ so `FoundationPose`, `SAM`, `TRELLIS`, and `cuRobo` containers never need
++  `rclpy` in their already-fragile dependency graphs.
++
++## Calibration workflow
++
++```bash
++# 1. ONCE per arm. Uncorrected DH deltas put mm-level error into FK, and
++#    hand-eye has no way to separate that from the extrinsic.
++make kinematics
++
++# 2. Bring the hardware up, then the calibration GUI.
++COMPOSE_PROFILES=ur,camera docker compose up -d
++make calibrate
++
++# 3. Jog to ~15-20 poses, "Take Sample" at each, then Compute and Save.
++#    Rotate the flange as far as joint limits allow about ALL THREE axes, in
++#    both directions. Translation-only samples leave the rotation estimate
++#    rank deficient and the solve will be confidently wrong.
++
++# 4. Promote the result into the cell's geometry.
++make promote CALIB=~/.ros2/easy_handeye2/calibrations/ur5e_d435_eob.calib
++
++# 5. The cell profile now publishes it on every boot.
++docker compose --profile cell up -d --force-recreate cell
++```
++
++## Adding a module
++
++1. `docker/modules/<name>/Dockerfile`, `FROM ros2-essentials/base:${TAG}` (or
++   `base-gui` if it opens a window, `base-cuda` if it genuinely needs both ROS
++   and CUDA in one process).
++2. A `<name>:` target in the `Makefile` with the correct base as a prerequisite.
++3. One service block in `docker-compose.yml` with `profiles: [<name>]`.
++4. Add the profile to whichever `cells/*.env` should run it.
++
++## Things that will bite
++
++- **Frame names take no leading slash.** Upstream `easy_handeye2` docs still
++  show `/base_link`; that is ROS 1 legacy and ROS 2 `tf2` rejects it.
++- **UR frames.** `base_link` is the URDF root; `base` is the ROS-Industrial
++  rotated frame. Mixing them costs a 180° yaw that looks almost plausible.
++- **Measure the marker.** `MARKER_SIZE` is the black square edge in metres, and
++  printers lie about scale. A 2% size error is a 2% range bias no number of
++  extra samples will average away.
++- **Two NICs, one Cyclone.** With a robot NIC and a lab NIC, pin the interface
++  in `config/cyclonedds.xml` or discovery will intermittently pick wrong.
++- **`HOST_UID` must match you.** Otherwise `src/` fills with root-owned
++  `build/` and `install/` trees. `make doctor` checks this.
++- **CUDA 11.4 hosts cannot run `base-cuda`.** NVIDIA ships no 22.04 image below
++  CUDA 11.7, and ROS 2 Humble needs 22.04. Keep CUDA work in ZMQ sidecars —
++  which is what `ros_zmq_bridge` is for — rather than fighting this.
++
++## Compose note
++
++Everything lives in one `docker-compose.yml` rather than per-module fragments
++under `compose/`. Compose's `include:` resolves relative paths against the
++*included* file's directory, so `./src:/ws/src` inside `compose/ur.yml`
++silently becomes `compose/src`. `project_directory:` patches it, but then
++`extends:` resolution gets murky. Past ~15 services, revisit — with that caveat
++in hand.
+diff --git a/calibrations/README.md b/calibrations/README.md
+new file mode 100644
+index 0000000..2929cda
+--- /dev/null
++++ b/calibrations/README.md
+@@ -0,0 +1,26 @@
++# calibrations/
++
++One directory per cell. Committed on purpose.
++
++```
++calibrations/
++└── purdue-ur5e-01/
++    ├── extrinsics.yaml              <- what the `cell` profile reads at boot
++    ├── extrinsics.2026-08-14.bak.yaml
++    └── 2026-08-14_ur5e_d435_eob.calib   <- raw easy_handeye2 output, archived
++```
++
++`extrinsics.yaml` is generated by `scripts/promote_calibration.py`, never by
++hand. It is the single source of truth for the cell's static geometry, read by
++`cell_description` for TF and directly parseable by the ZMQ sidecars without
++pulling in ROS.
++
++**Why this is version controlled.** A calibration is an experimental result. Six
++months from now, when a grasp is consistently 8 mm off, the question you will
++need to answer is "which calibration was this run using, and what changed" —
++and the only way to answer it is if every result was kept, date-stamped, next
++to the raw `.calib` that produced it.
++
++Promoting a new result archives the previous `extrinsics.yaml` automatically,
++so reverting a calibration that turned out worse than the old one is a `git
++checkout` or a file copy, not an afternoon.
+diff --git a/cells/README.md b/cells/README.md
+new file mode 100644
+index 0000000..20b5ec5
+--- /dev/null
++++ b/cells/README.md
+@@ -0,0 +1,15 @@
++# cells/
++
++One `.env` per physical machine. `.env` at the repo root is a symlink into
++this directory, created by `make setup` (which uses `hostname` by default).
++
++Cell configs **are** committed. They contain robot IPs and camera serials, not
++secrets, and the whole point is that a bench can be rebuilt from git.
++
++Add a machine:
++
++```bash
++cp cells/example-ur5e-01.env cells/penn-bench-02.env
++$EDITOR cells/penn-bench-02.env      # CELL_NAME, COMPOSE_PROFILES, ROBOT_IP
++make setup CELL=penn-bench-02
++```
+diff --git a/cells/example-ur5e-01.env b/cells/example-ur5e-01.env
+new file mode 100644
+index 0000000..4d2b89e
+--- /dev/null
++++ b/cells/example-ur5e-01.env
+@@ -0,0 +1,71 @@
++# ===========================================================================
++# Cell config. One file per physical machine; .env is a symlink to one of them.
++# `make setup` creates and links this for you based on hostname.
++#
++# The repo is identical on every bench. THIS FILE is the machine's identity.
++# ===========================================================================
++
++CELL_NAME=example-ur5e-01
++
++# Which modules this machine runs. This is the whole point of the profile
++# layout: the manipulator bench and the perception box share a repo and differ
++# only on this line.
++#   ur,camera,cell        manipulator bench, normal operation
++#   ur,camera,calib,viz   same bench, calibration day
++#   perception,cell       GPU box
++COMPOSE_PROFILES=ur,camera,cell
++
++TAG=dev
++ROS_DISTRO=humble
++HOST_UID=1000
++HOST_GID=1000
++
++# --- DDS -------------------------------------------------------------------
++# Pick a per-cell domain id so two benches on one lab LAN do not discover each
++# other and fight over /joint_states.
++ROS_DOMAIN_ID=42
++RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
++# With a robot NIC and a lab NIC on the same host, discovery will otherwise
++# pick one at random, intermittently, which is a miserable bug to chase.
++CYCLONEDDS_URI=file:///config/cyclonedds.xml
++
++# --- robot -----------------------------------------------------------------
++UR_TYPE=ur5e
++ROBOT_IP=192.168.1.102
++UR_HEADLESS=true
++UR_KINEMATICS_FILE=/config/ur_kinematics.yaml
++ROBOT_BASE_FRAME=base_link
++ROBOT_EE_FRAME=tool0
++MOVEIT_RVIZ=true
++
++# --- camera ----------------------------------------------------------------
++CAMERA_NAME=camera
++# Leave empty for "whichever one is plugged in". Set it once you have two.
++CAMERA_SERIAL=
++RGB_PROFILE=1280x720x30
++ENABLE_DEPTH=true
++ALIGN_DEPTH=true
++CAMERA_OPTICAL_FRAME=camera_color_optical_frame
++IMAGE_TOPIC=/camera/camera/color/image_raw
++DEPTH_TOPIC=/camera/camera/aligned_depth_to_color/image_raw
++CAMERA_INFO_TOPIC=/camera/camera/color/camera_info
++
++# --- calibration target ----------------------------------------------------
++MARKER_ID=582
++# METRES, measured on the printed sheet. Printer scaling lies; a 2% size error
++# is a 2% range bias that no amount of extra samples will average out.
++MARKER_SIZE=0.05
++MARKER_FRAME=aruco_marker_frame
++
++# --- calibration -----------------------------------------------------------
++# eye_on_base: camera fixed to the world, marker on the flange
++# eye_in_hand: camera on the flange, marker fixed to the table
++CALIB_TYPE=eye_on_base
++CALIB_NAME=ur5e_d435_eob
++FREEHAND=true
++
++# --- perception bridge -----------------------------------------------------
++BRIDGE_BIND=tcp://0.0.0.0:5680
++
++# --- viz -------------------------------------------------------------------
++RVIZ_CONFIG=cell.rviz
+diff --git a/config/cyclonedds.xml b/config/cyclonedds.xml
+new file mode 100644
+index 0000000..ec949f6
+--- /dev/null
++++ b/config/cyclonedds.xml
+@@ -0,0 +1,30 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!--
++  Pin Cyclone to one interface. On a bench with a robot NIC and a lab NIC,
++  leaving this to autodetection means discovery intermittently binds the wrong
++  one and nodes stop seeing each other for no visible reason.
++
++  Set NetworkInterfaceAddress to the interface facing the OTHER ROS machines
++  (usually the lab LAN), not the robot's private link.
++-->
++<CycloneDDS xmlns="https://cdds.io/config">
++  <Domain id="any">
++    <General>
++      <Interfaces>
++        <NetworkInterface autodetermine="true" priority="default" multicast="default" />
++        <!-- Replace the line above with an explicit interface once known: -->
++        <!-- <NetworkInterface name="eno1" priority="default" multicast="default" /> -->
++      </Interfaces>
++      <AllowMulticast>default</AllowMulticast>
++      <MaxMessageSize>65500B</MaxMessageSize>
++    </General>
++    <Internal>
++      <!-- Large image messages over loopback benefit from a bigger buffer. -->
++      <MinimumSocketReceiveBufferSize>10MB</MinimumSocketReceiveBufferSize>
++    </Internal>
++    <Tracing>
++      <Verbosity>warning</Verbosity>
++      <OutputFile>stderr</OutputFile>
++    </Tracing>
++  </Domain>
++</CycloneDDS>
+diff --git a/config/rviz/.gitkeep b/config/rviz/.gitkeep
+new file mode 100644
+index 0000000..e69de29
+diff --git a/docker-compose.yml b/docker-compose.yml
+new file mode 100644
+index 0000000..759e0c1
+--- /dev/null
++++ b/docker-compose.yml
+@@ -0,0 +1,239 @@
++# ===========================================================================
++# ros2-essentials
++#
++# One file, module boundaries expressed as PROFILES. A machine's identity is
++# its COMPOSE_PROFILES value in cells/<hostname>.env -- the manipulator bench
++# runs `ur,camera,cell`, the perception box runs `perception,cell`, same repo.
++#
++#   host networking + shared IPC
++#     ur_robot_driver opens reverse-connection ports the controller dials back
++#     into, and DDS discovery across bridge networks is a reliable source of
++#     wasted afternoons. Host netns fixes both, and lets these containers talk
++#     to nodes you run natively on the host.
++#
++# Adding a module = one service block + one profile name. Images are built by
++# the Makefile (base -> base-gui -> modules), because compose does not order
++# builds by FROM dependency.
++# ===========================================================================
++
++x-ros: &ros
++  network_mode: host
++  ipc: host
++  stdin_open: true
++  tty: true
++  restart: "no"
++  environment: &ros-env
++    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
++    RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
++    CYCLONEDDS_URI: ${CYCLONEDDS_URI:-}
++    CELL_NAME: ${CELL_NAME:-unnamed-cell}
++  volumes: &ros-vols
++    - ./src:/ws/src
++    - ./config:/config:ro
++    - ./calibrations:/calibrations
++
++x-ros-gui: &ros-gui
++  <<: *ros
++  environment:
++    <<: *ros-env
++    DISPLAY: ${DISPLAY:-:0}
++    QT_X11_NO_MITSHM: 1
++    XAUTHORITY: /tmp/.docker.xauth
++  volumes:
++    - ./src:/ws/src
++    - ./config:/config:ro
++    - ./calibrations:/calibrations
++    - /tmp/.X11-unix:/tmp/.X11-unix:rw
++    - /tmp/.docker.xauth:/tmp/.docker.xauth:rw
++
++services:
++
++  # ======================================================================
++  # profile: ur
++  # ======================================================================
++  ur:
++    <<: *ros
++    profiles: [ur]
++    container_name: ${CELL_NAME:-cell}_ur
++    image: ros2-essentials/ur:${TAG:-dev}
++    build:
++      context: .
++      dockerfile: docker/modules/ur/Dockerfile
++      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
++              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
++    command: >
++      ros2 launch ur_robot_driver ur_control.launch.py
++        ur_type:=${UR_TYPE:-ur5e}
++        robot_ip:=${ROBOT_IP:-192.168.1.102}
++        launch_rviz:=false
++        headless_mode:=${UR_HEADLESS:-true}
++        kinematics_params_file:=${UR_KINEMATICS_FILE:-/config/ur_kinematics.yaml}
++
++  # One-shot: pull the arm's factory DH deltas off the controller. Run ONCE
++  # per arm, before calibrating. Uncorrected FK puts mm-level error straight
++  # into the hand-eye extrinsic, and hand-eye cannot separate the two.
++  ur-kinematics:
++    <<: *ros
++    profiles: [oneshot]
++    image: ros2-essentials/ur:${TAG:-dev}
++    volumes:
++      - ./src:/ws/src
++      - ./config:/config:rw
++      - ./calibrations:/calibrations
++    command: >
++      ros2 launch ur_calibration calibration_correction.launch.py
++        robot_ip:=${ROBOT_IP:-192.168.1.102}
++        target_filename:=/config/ur_kinematics.yaml
++
++  moveit:
++    <<: *ros-gui
++    profiles: [moveit]
++    container_name: ${CELL_NAME:-cell}_moveit
++    image: ros2-essentials/ur:${TAG:-dev}
++    command: >
++      ros2 launch ur_moveit_config ur_moveit.launch.py
++        ur_type:=${UR_TYPE:-ur5e}
++        launch_rviz:=${MOVEIT_RVIZ:-true}
++
++  # ======================================================================
++  # profile: camera
++  # ======================================================================
++  camera:
++    <<: *ros
++    profiles: [camera]
++    container_name: ${CELL_NAME:-cell}_camera
++    image: ros2-essentials/realsense:${TAG:-dev}
++    build:
++      context: .
++      dockerfile: docker/modules/realsense/Dockerfile
++      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
++              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
++    privileged: true
++    volumes:
++      - ./src:/ws/src
++      - ./config:/config:ro
++      - ./calibrations:/calibrations
++      - /dev:/dev
++    command: >
++      ros2 launch realsense2_camera rs_launch.py
++        camera_name:=${CAMERA_NAME:-camera}
++        serial_no:=${CAMERA_SERIAL:-}
++        rgb_camera.profile:=${RGB_PROFILE:-1280x720x30}
++        enable_depth:=${ENABLE_DEPTH:-true}
++        align_depth.enable:=${ALIGN_DEPTH:-true}
++        pointcloud.enable:=false
++
++  # ======================================================================
++  # profile: calib   (producer -- runs a few times a year, interactive)
++  # ======================================================================
++  tracker:
++    <<: *ros-gui
++    profiles: [calib]
++    container_name: ${CELL_NAME:-cell}_tracker
++    image: ros2-essentials/calibration:${TAG:-dev}
++    build:
++      context: .
++      dockerfile: docker/modules/calibration/Dockerfile
++      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
++              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
++    command: >
++      ros2 launch handeye_bringup tracker.launch.py
++        marker_id:=${MARKER_ID:-582}
++        marker_size:=${MARKER_SIZE:-0.05}
++        marker_frame:=${MARKER_FRAME:-aruco_marker_frame}
++        camera_optical_frame:=${CAMERA_OPTICAL_FRAME:-camera_color_optical_frame}
++        image_topic:=${IMAGE_TOPIC:-/camera/camera/color/image_raw}
++        camera_info_topic:=${CAMERA_INFO_TOPIC:-/camera/camera/color/camera_info}
++
++  handeye:
++    <<: *ros-gui
++    profiles: [calib]
++    container_name: ${CELL_NAME:-cell}_handeye
++    image: ros2-essentials/calibration:${TAG:-dev}
++    command: >
++      ros2 launch easy_handeye2 calibrate.launch.py
++        calibration_type:=${CALIB_TYPE:-eye_on_base}
++        name:=${CALIB_NAME:-default_eob}
++        robot_base_frame:=${ROBOT_BASE_FRAME:-base_link}
++        robot_effector_frame:=${ROBOT_EE_FRAME:-tool0}
++        tracking_base_frame:=${CAMERA_OPTICAL_FRAME:-camera_color_optical_frame}
++        tracking_marker_frame:=${MARKER_FRAME:-aruco_marker_frame}
++        freehand_robot_movement:=${FREEHAND:-true}
++
++  # Offline smoke test. No arm, no camera, no marker.
++  handeye-demo:
++    <<: *ros-gui
++    profiles: [demo]
++    image: ros2-essentials/calibration:${TAG:-dev}
++    command: >
++      ros2 launch easy_handeye2_demo calibrate.launch.py
++        calibration_type:=${CALIB_TYPE:-eye_on_base}
++
++  # ======================================================================
++  # profile: cell   (consumer -- runs on every boot of every stack)
++  # ======================================================================
++  # Reads calibrations/<cell>/extrinsics.yaml and publishes it as static TF.
++  # Deliberately NOT easy_handeye2's publish.launch.py: one source of truth
++  # for every extrinsic in the cell, readable by MoveIt, rviz, and the
++  # ZMQ sidecars alike, and versioned in git.
++  cell:
++    <<: *ros
++    profiles: [cell]
++    container_name: ${CELL_NAME:-cell}_extrinsics
++    image: ros2-essentials/base:${TAG:-dev}
++    build:
++      context: .
++      dockerfile: docker/base/Dockerfile
++      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}",
++              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
++    command: >
++      ros2 launch cell_description extrinsics.launch.py
++        extrinsics_file:=/calibrations/${CELL_NAME:-unnamed-cell}/extrinsics.yaml
++
++  # ======================================================================
++  # profile: perception
++  # ======================================================================
++  bridge:
++    <<: *ros
++    profiles: [perception]
++    container_name: ${CELL_NAME:-cell}_bridge
++    image: ros2-essentials/perception:${TAG:-dev}
++    build:
++      context: .
++      dockerfile: docker/modules/perception/Dockerfile
++      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
++              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
++    command: >
++      ros2 launch ros_zmq_bridge bridge.launch.py
++        bind_address:=${BRIDGE_BIND:-tcp://0.0.0.0:5680}
++        color_topic:=${IMAGE_TOPIC:-/camera/camera/color/image_raw}
++        depth_topic:=${DEPTH_TOPIC:-/camera/camera/aligned_depth_to_color/image_raw}
++        camera_info_topic:=${CAMERA_INFO_TOPIC:-/camera/camera/color/camera_info}
++        base_frame:=${ROBOT_BASE_FRAME:-base_link}
++        ee_frame:=${ROBOT_EE_FRAME:-tool0}
++
++  # ======================================================================
++  # profile: viz / shell
++  # ======================================================================
++  rviz:
++    <<: *ros-gui
++    profiles: [viz]
++    image: ros2-essentials/tools:${TAG:-dev}
++    build:
++      context: .
++      dockerfile: docker/modules/tools/Dockerfile
++      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
++              HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
++    command: rviz2 -d /config/rviz/${RVIZ_CONFIG:-cell.rviz}
++
++  foxglove:
++    <<: *ros
++    profiles: [viz]
++    image: ros2-essentials/tools:${TAG:-dev}
++    command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
++
++  shell:
++    <<: *ros-gui
++    profiles: [shell]
++    image: ros2-essentials/tools:${TAG:-dev}
++    command: bash
+diff --git a/docker/base-cuda/Dockerfile b/docker/base-cuda/Dockerfile
+new file mode 100644
+index 0000000..c75f220
+--- /dev/null
++++ b/docker/base-cuda/Dockerfile
+@@ -0,0 +1,66 @@
++# ---------------------------------------------------------------------------
++# ros2-essentials/base-cuda  --  CUDA devel + ROS 2 installed on top
++#
++# NOTE ON VERSIONS. ROS 2 Humble requires Ubuntu 22.04. NVIDIA does not ship
++# 22.04 images for CUDA < 11.7, so a host pinned to CUDA 11.4 (driver ~470)
++# cannot run this image. Two options there:
++#   (a) keep CUDA workloads out of ROS entirely and talk to them over ZMQ
++#       (this is what src/ros_zmq_bridge is for -- the recommended path), or
++#   (b) build this FROM nvidia/cuda:11.4.*-ubuntu20.04 and drop to ROS 2 Foxy.
++# ---------------------------------------------------------------------------
++ARG CUDA_IMAGE=nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
++FROM ${CUDA_IMAGE}
++ARG ROS_DISTRO=humble
++
++ENV DEBIAN_FRONTEND=noninteractive \
++    LANG=C.UTF-8 \
++    LC_ALL=C.UTF-8 \
++    ROS_DISTRO=${ROS_DISTRO}
++SHELL ["/bin/bash", "-o", "pipefail", "-c"]
++
++RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
++    apt-get update && apt-get install -y --no-install-recommends \
++      curl gnupg2 lsb-release ca-certificates software-properties-common \
++    && add-apt-repository universe -y \
++    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
++         -o /usr/share/keyrings/ros-archive-keyring.gpg \
++    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
++http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
++         > /etc/apt/sources.list.d/ros2.list \
++    && apt-get update && apt-get install -y --no-install-recommends \
++      build-essential cmake git sudo nano less iproute2 iputils-ping \
++      python3-pip python3-vcstool python3-rosdep \
++      python3-colcon-common-extensions \
++      ros-${ROS_DISTRO}-ros-base \
++      ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
++      ros-${ROS_DISTRO}-tf2-ros \
++    && rosdep init || true \
++    && rm -rf /var/lib/apt/lists/*
++
++ARG USERNAME=ros
++ARG HOST_UID=1000
++ARG HOST_GID=1000
++RUN if ! getent group ${HOST_GID} >/dev/null; then groupadd -g ${HOST_GID} ${USERNAME}; fi \
++ && useradd -o -m -u ${HOST_UID} -g ${HOST_GID} -d /home/${USERNAME} -s /bin/bash ${USERNAME} \
++ && usermod -aG video,plugdev,dialout,sudo ${USERNAME} \
++ && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/99-${USERNAME} \
++ && chmod 0440 /etc/sudoers.d/99-${USERNAME} \
++ && mkdir -p /home/${USERNAME}/.ros2 /ws/src /opt/overlay \
++ && chown -R ${HOST_UID}:${HOST_GID} /home/${USERNAME} /ws /opt/overlay
++
++ENV WS=/ws \
++    OVERLAY_WS=/opt/overlay \
++    HOME=/home/${USERNAME} \
++    RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
++    NVIDIA_VISIBLE_DEVICES=all \
++    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
++
++COPY docker/common/entrypoint.sh /usr/local/bin/entrypoint.sh
++COPY docker/common/ws-build      /usr/local/bin/ws-build
++COPY docker/common/overlay-build /usr/local/bin/overlay-build
++RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/ws-build /usr/local/bin/overlay-build
++
++USER ${HOST_UID}:${HOST_GID}
++WORKDIR /ws
++ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
++CMD ["bash"]
+diff --git a/docker/base-gui/Dockerfile b/docker/base-gui/Dockerfile
+new file mode 100644
+index 0000000..43917be
+--- /dev/null
++++ b/docker/base-gui/Dockerfile
+@@ -0,0 +1,33 @@
++# ---------------------------------------------------------------------------
++# ros2-essentials/base-gui  --  base + X11 + rviz/rqt
++#
++# Split out from base so that headless modules (drivers, perception sidecars)
++# do not carry ~1.5 GB of Qt they will never open.
++# ---------------------------------------------------------------------------
++ARG ROS_DISTRO=humble
++ARG TAG=dev
++FROM ros2-essentials/base:${TAG}
++ARG ROS_DISTRO
++
++USER root
++ENV DEBIAN_FRONTEND=noninteractive
++SHELL ["/bin/bash", "-o", "pipefail", "-c"]
++
++RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
++    apt-get update && apt-get install -y --no-install-recommends \
++      libgl1-mesa-glx libgl1-mesa-dri libxkbcommon-x11-0 \
++      x11-apps mesa-utils \
++      ros-${ROS_DISTRO}-rviz2 \
++      ros-${ROS_DISTRO}-rqt-gui ros-${ROS_DISTRO}-rqt-gui-py \
++      ros-${ROS_DISTRO}-rqt-common-plugins \
++      ros-${ROS_DISTRO}-rqt-image-view \
++      ros-${ROS_DISTRO}-rqt-tf-tree \
++      ros-${ROS_DISTRO}-joint-state-publisher-gui \
++    && rm -rf /var/lib/apt/lists/*
++
++ENV QT_X11_NO_MITSHM=1
++
++ARG HOST_UID=1000
++ARG HOST_GID=1000
++USER ${HOST_UID}:${HOST_GID}
++WORKDIR /ws
+diff --git a/docker/base/Dockerfile b/docker/base/Dockerfile
+new file mode 100644
+index 0000000..2de285d
+--- /dev/null
++++ b/docker/base/Dockerfile
+@@ -0,0 +1,62 @@
++# ---------------------------------------------------------------------------
++# ros2-essentials/base
++#
++# Deliberately thin. Everything that every module needs and nothing else:
++# the distro, a sane DDS, colcon tooling, a UID-matched user, the entrypoint.
++#
++# Anything hardware- or task-specific belongs in docker/modules/*.
++# ---------------------------------------------------------------------------
++ARG ROS_DISTRO=humble
++FROM ros:${ROS_DISTRO}-ros-base AS base
++ARG ROS_DISTRO
++
++ENV DEBIAN_FRONTEND=noninteractive \
++    LANG=C.UTF-8 \
++    LC_ALL=C.UTF-8 \
++    ROS_DISTRO=${ROS_DISTRO}
++SHELL ["/bin/bash", "-o", "pipefail", "-c"]
++
++RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
++    --mount=type=cache,target=/var/lib/apt,sharing=locked \
++    apt-get update && apt-get install -y --no-install-recommends \
++      build-essential cmake git curl wget nano less sudo \
++      iputils-ping iproute2 net-tools \
++      python3-pip python3-vcstool python3-rosdep \
++      python3-colcon-common-extensions python3-colcon-mixin \
++      ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
++      ros-${ROS_DISTRO}-tf2-ros ros-${ROS_DISTRO}-tf2-tools \
++    && rm -rf /var/lib/apt/lists/*
++
++# --- UID-matched user -------------------------------------------------------
++# /ws is bind-mounted from the host. Building as root leaves you with
++# root-owned build/ install/ log/ trees that you cannot rm without sudo.
++ARG USERNAME=ros
++ARG HOST_UID=1000
++ARG HOST_GID=1000
++RUN if ! getent group ${HOST_GID} >/dev/null; then groupadd -g ${HOST_GID} ${USERNAME}; fi \
++ && useradd -o -m -u ${HOST_UID} -g ${HOST_GID} -d /home/${USERNAME} -s /bin/bash ${USERNAME} \
++ && usermod -aG video,plugdev,dialout,sudo ${USERNAME} \
++ && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/99-${USERNAME} \
++ && chmod 0440 /etc/sudoers.d/99-${USERNAME} \
++ && mkdir -p /home/${USERNAME}/.ros2 /ws/src /opt/overlay \
++ && chown -R ${HOST_UID}:${HOST_GID} /home/${USERNAME} /ws /opt/overlay
++
++ENV WS=/ws \
++    OVERLAY_WS=/opt/overlay \
++    HOME=/home/${USERNAME} \
++    RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
++    ROS_LOCALHOST_ONLY=0 \
++    RCUTILS_COLORIZED_OUTPUT=1 \
++    RCUTILS_CONSOLE_OUTPUT_FORMAT="[{severity}] [{name}]: {message}"
++
++COPY docker/common/entrypoint.sh /usr/local/bin/entrypoint.sh
++COPY docker/common/ws-build      /usr/local/bin/ws-build
++COPY docker/common/overlay-build /usr/local/bin/overlay-build
++RUN chmod +x /usr/local/bin/entrypoint.sh \
++             /usr/local/bin/ws-build \
++             /usr/local/bin/overlay-build
++
++USER ${HOST_UID}:${HOST_GID}
++WORKDIR /ws
++ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
++CMD ["bash"]
+diff --git a/docker/common/entrypoint.sh b/docker/common/entrypoint.sh
+new file mode 100755
+index 0000000..b6e5ab5
+--- /dev/null
++++ b/docker/common/entrypoint.sh
+@@ -0,0 +1,17 @@
++#!/usr/bin/env bash
++# Layer the three workspaces, then exec whatever the service asked for.
++set -e
++
++source "/opt/ros/${ROS_DISTRO}/setup.bash"
++
++# Module overlay baked into the image at build time (easy_handeye2, etc).
++if [ -f "${OVERLAY_WS}/install/setup.bash" ]; then
++  source "${OVERLAY_WS}/install/setup.bash"
++fi
++
++# Your packages, bind-mounted from the host. Built with `make ws`.
++if [ -f "${WS}/install/setup.bash" ]; then
++  source "${WS}/install/setup.bash"
++fi
++
++exec "$@"
+diff --git a/docker/common/overlay-build b/docker/common/overlay-build
+new file mode 100755
+index 0000000..f9c1eb7
+--- /dev/null
++++ b/docker/common/overlay-build
+@@ -0,0 +1,15 @@
++#!/usr/bin/env bash
++# Build a source overlay into /opt/overlay from a .repos file. Image-build only.
++# usage: overlay-build /tmp/foo.repos
++set -euo pipefail
++REPOS_FILE="$1"
++source "/opt/ros/${ROS_DISTRO}/setup.bash"
++mkdir -p "${OVERLAY_WS}/src"
++cd "${OVERLAY_WS}"
++vcs import src < "${REPOS_FILE}"
++sudo apt-get update
++rosdep update --rosdistro "${ROS_DISTRO}"
++rosdep install --from-paths src --ignore-src -r -y
++colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
++rm -rf "${OVERLAY_WS}/build" "${OVERLAY_WS}/log"
++sudo rm -rf /var/lib/apt/lists/*
+diff --git a/docker/common/ws-build b/docker/common/ws-build
+new file mode 100755
+index 0000000..331ea31
+--- /dev/null
++++ b/docker/common/ws-build
+@@ -0,0 +1,8 @@
++#!/usr/bin/env bash
++# Build the bind-mounted user workspace at /ws.
++set -euo pipefail
++source "/opt/ros/${ROS_DISTRO}/setup.bash"
++[ -f "${OVERLAY_WS}/install/setup.bash" ] && source "${OVERLAY_WS}/install/setup.bash"
++cd "${WS}"
++colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release "$@"
++echo "built -> source ${WS}/install/setup.bash"
+diff --git a/docker/modules/calibration/Dockerfile b/docker/modules/calibration/Dockerfile
+new file mode 100644
+index 0000000..a6f0bed
+--- /dev/null
++++ b/docker/modules/calibration/Dockerfile
+@@ -0,0 +1,36 @@
++# ---------------------------------------------------------------------------
++# ros2-essentials/calibration  --  easy_handeye2 + marker detectors
++#
++# This module consumes TF ONLY. It does not link against the UR driver or the
++# RealSense SDK, which is exactly why it can sit on base-gui rather than
++# inheriting from either hardware image.
++# ---------------------------------------------------------------------------
++ARG ROS_DISTRO=humble
++ARG TAG=dev
++FROM ros2-essentials/base-gui:${TAG}
++ARG ROS_DISTRO
++
++USER root
++ENV DEBIAN_FRONTEND=noninteractive
++SHELL ["/bin/bash", "-o", "pipefail", "-c"]
++
++RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
++    apt-get update && apt-get install -y --no-install-recommends \
++      python3-transforms3d \
++      ros-${ROS_DISTRO}-aruco-ros \
++      ros-${ROS_DISTRO}-aruco-opencv \
++      ros-${ROS_DISTRO}-apriltag-ros \
++      ros-${ROS_DISTRO}-image-proc \
++      ros-${ROS_DISTRO}-camera-calibration \
++      ros-${ROS_DISTRO}-moveit-resources-panda-moveit-config \
++      ros-${ROS_DISTRO}-moveit \
++    && rm -rf /var/lib/apt/lists/*
++
++ARG HOST_UID=1000
++ARG HOST_GID=1000
++USER ${HOST_UID}:${HOST_GID}
++
++COPY --chown=${HOST_UID}:${HOST_GID} repos/calibration.repos /tmp/calibration.repos
++RUN /usr/local/bin/overlay-build /tmp/calibration.repos
++
++WORKDIR /ws
+diff --git a/docker/modules/perception/Dockerfile b/docker/modules/perception/Dockerfile
+new file mode 100644
+index 0000000..3f95877
+--- /dev/null
++++ b/docker/modules/perception/Dockerfile
+@@ -0,0 +1,32 @@
++# ---------------------------------------------------------------------------
++# ros2-essentials/perception  --  thin ROS side of the perception boundary
++#
++# Intent: this image holds the BRIDGE, not the models. Heavy CUDA work
++# (FoundationPose, SAM, TRELLIS, cuRobo) stays in its own sidecar containers
++# with its own dependency graph, reached over ZMQ. Keeping rclpy out of those
++# images is the whole point -- do not let ROS creep in there.
++# ---------------------------------------------------------------------------
++ARG ROS_DISTRO=humble
++ARG TAG=dev
++FROM ros2-essentials/base:${TAG}
++ARG ROS_DISTRO
++
++USER root
++ENV DEBIAN_FRONTEND=noninteractive
++SHELL ["/bin/bash", "-o", "pipefail", "-c"]
++
++RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
++    apt-get update && apt-get install -y --no-install-recommends \
++      ros-${ROS_DISTRO}-cv-bridge \
++      ros-${ROS_DISTRO}-image-transport \
++      ros-${ROS_DISTRO}-vision-msgs \
++      ros-${ROS_DISTRO}-message-filters \
++      python3-opencv \
++    && rm -rf /var/lib/apt/lists/*
++
++RUN pip3 install --no-cache-dir pyzmq==26.* msgpack==1.* numpy
++
++ARG HOST_UID=1000
++ARG HOST_GID=1000
++USER ${HOST_UID}:${HOST_GID}
++WORKDIR /ws
+diff --git a/docker/modules/realsense/Dockerfile b/docker/modules/realsense/Dockerfile
+new file mode 100644
+index 0000000..de88c3d
+--- /dev/null
++++ b/docker/modules/realsense/Dockerfile
+@@ -0,0 +1,30 @@
++# ---------------------------------------------------------------------------
++# ros2-essentials/realsense  --  librealsense2 + realsense2_camera
++#
++# Swapping sensors means swapping this file only. The contract with everything
++# downstream is: image_raw + camera_info + a TF for the optical frame.
++# ---------------------------------------------------------------------------
++ARG ROS_DISTRO=humble
++ARG TAG=dev
++FROM ros2-essentials/base:${TAG}
++ARG ROS_DISTRO
++
++USER root
++ENV DEBIAN_FRONTEND=noninteractive
++SHELL ["/bin/bash", "-o", "pipefail", "-c"]
++
++RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
++    apt-get update && apt-get install -y --no-install-recommends \
++      ros-${ROS_DISTRO}-realsense2-camera \
++      ros-${ROS_DISTRO}-realsense2-description \
++      ros-${ROS_DISTRO}-image-proc \
++      ros-${ROS_DISTRO}-image-transport-plugins \
++      ros-${ROS_DISTRO}-depth-image-proc \
++      ros-${ROS_DISTRO}-camera-calibration \
++      ros-${ROS_DISTRO}-camera-calibration-parsers \
++    && rm -rf /var/lib/apt/lists/*
++
++ARG HOST_UID=1000
++ARG HOST_GID=1000
++USER ${HOST_UID}:${HOST_GID}
++WORKDIR /ws
+diff --git a/docker/modules/tools/Dockerfile b/docker/modules/tools/Dockerfile
+new file mode 100644
+index 0000000..462b572
+--- /dev/null
++++ b/docker/modules/tools/Dockerfile
+@@ -0,0 +1,28 @@
++# ---------------------------------------------------------------------------
++# ros2-essentials/tools  --  rviz, rosbag, plotjuggler, foxglove bridge
++# The image you shell into when something is wrong.
++# ---------------------------------------------------------------------------
++ARG ROS_DISTRO=humble
++ARG TAG=dev
++FROM ros2-essentials/base-gui:${TAG}
++ARG ROS_DISTRO
++
++USER root
++ENV DEBIAN_FRONTEND=noninteractive
++SHELL ["/bin/bash", "-o", "pipefail", "-c"]
++
++RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
++    apt-get update && apt-get install -y --no-install-recommends \
++      ros-${ROS_DISTRO}-rosbag2 \
++      ros-${ROS_DISTRO}-rosbag2-storage-mcap \
++      ros-${ROS_DISTRO}-foxglove-bridge \
++      ros-${ROS_DISTRO}-plotjuggler-ros \
++      ros-${ROS_DISTRO}-topic-tools \
++      ros-${ROS_DISTRO}-rqt-graph \
++      ros-${ROS_DISTRO}-rqt-reconfigure \
++    && rm -rf /var/lib/apt/lists/*
++
++ARG HOST_UID=1000
++ARG HOST_GID=1000
++USER ${HOST_UID}:${HOST_GID}
++WORKDIR /ws
+diff --git a/docker/modules/ur/Dockerfile b/docker/modules/ur/Dockerfile
+new file mode 100644
+index 0000000..54af2ee
+--- /dev/null
++++ b/docker/modules/ur/Dockerfile
+@@ -0,0 +1,30 @@
++# ---------------------------------------------------------------------------
++# ros2-essentials/ur  --  Universal Robots driver + MoveIt
++# All apt. Nothing built from source, so this image is cheap to rebuild.
++# ---------------------------------------------------------------------------
++ARG ROS_DISTRO=humble
++ARG TAG=dev
++FROM ros2-essentials/base:${TAG}
++ARG ROS_DISTRO
++
++USER root
++ENV DEBIAN_FRONTEND=noninteractive
++SHELL ["/bin/bash", "-o", "pipefail", "-c"]
++
++RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
++    apt-get update && apt-get install -y --no-install-recommends \
++      ros-${ROS_DISTRO}-ur \
++      ros-${ROS_DISTRO}-ur-robot-driver \
++      ros-${ROS_DISTRO}-ur-description \
++      ros-${ROS_DISTRO}-ur-moveit-config \
++      ros-${ROS_DISTRO}-ur-calibration \
++      ros-${ROS_DISTRO}-moveit \
++      ros-${ROS_DISTRO}-robot-state-publisher \
++      ros-${ROS_DISTRO}-joint-state-broadcaster \
++      ros-${ROS_DISTRO}-controller-manager \
++    && rm -rf /var/lib/apt/lists/*
++
++ARG HOST_UID=1000
++ARG HOST_GID=1000
++USER ${HOST_UID}:${HOST_GID}
++WORKDIR /ws
+diff --git a/repos/calibration.repos b/repos/calibration.repos
+new file mode 100644
+index 0000000..4e4040b
+--- /dev/null
++++ b/repos/calibration.repos
+@@ -0,0 +1,15 @@
++# Pinned by branch for now. Once you have a calibration you trust, replace
++# `version:` with the resolved SHA so the image is reproducible:
++#   docker compose run --rm handeye bash -c 'cd $OVERLAY_WS/src/easy_handeye2 && git rev-parse HEAD'
++repositories:
++  easy_handeye2:
++    type: git
++    url: https://github.com/marcoesposito1988/easy_handeye2.git
++    version: master
++
++  # Hardware-free playground (Panda + simulated tracker). The only way to
++  # smoke-test this image without the arm and camera on the bench.
++  easy_handeye2_demo:
++    type: git
++    url: https://github.com/marcoesposito1988/easy_handeye2_demo.git
++    version: master
+diff --git a/repos/perception.repos b/repos/perception.repos
+new file mode 100644
+index 0000000..5c40dcc
+--- /dev/null
++++ b/repos/perception.repos
+@@ -0,0 +1,6 @@
++# Intentionally empty. The perception module ships only the ROS<->ZMQ bridge,
++# which lives in src/ros_zmq_bridge and is bind-mounted, not baked in.
++#
++# If you later need a source-built ROS perception package here, add it and
++# wire `overlay-build /tmp/perception.repos` into docker/modules/perception.
++repositories: {}
+diff --git a/scripts/doctor.sh b/scripts/doctor.sh
+new file mode 100755
+index 0000000..69a1fc4
+--- /dev/null
++++ b/scripts/doctor.sh
+@@ -0,0 +1,54 @@
++#!/usr/bin/env bash
++# Cheap host-side checks for the failure modes that waste the most time.
++set -uo pipefail
++ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++fail=0
++ok()   { echo "  ok    $*"; }
++warn() { echo "  WARN  $*"; }
++bad()  { echo "  FAIL  $*"; fail=1; }
++
++echo "docker"
++command -v docker >/dev/null && ok "docker present" || bad "docker not installed"
++docker compose version >/dev/null 2>&1 \
++  && ok "compose v2 ($(docker compose version --short 2>/dev/null))" \
++  || bad "docker compose v2 not available"
++docker info >/dev/null 2>&1 && ok "daemon reachable" \
++  || bad "cannot reach docker daemon (are you in the docker group?)"
++
++echo "config"
++[ -e "${ROOT}/.env" ] && ok ".env -> $(readlink -f "${ROOT}/.env" | sed "s|${ROOT}/||")" \
++  || bad "no .env -- run: make setup"
++
++if [ -e "${ROOT}/.env" ]; then
++  # shellcheck disable=SC1091
++  set -a; . "${ROOT}/.env"; set +a
++  [ "${HOST_UID:-}" = "$(id -u)" ] && ok "HOST_UID matches $(id -u)" \
++    || warn "HOST_UID=${HOST_UID:-unset} != $(id -u); src/ will get root-owned files"
++  [ -n "${COMPOSE_PROFILES:-}" ] && ok "profiles: ${COMPOSE_PROFILES}" \
++    || warn "COMPOSE_PROFILES empty -- 'docker compose up' will start nothing"
++  if [ -n "${ROBOT_IP:-}" ]; then
++    ping -c1 -W1 "${ROBOT_IP}" >/dev/null 2>&1 \
++      && ok "robot ${ROBOT_IP} responds" || warn "robot ${ROBOT_IP} unreachable"
++  fi
++  CELL="${CELL_NAME:-unnamed-cell}"
++  [ -f "${ROOT}/calibrations/${CELL}/extrinsics.yaml" ] \
++    && ok "extrinsics present for ${CELL}" \
++    || warn "no calibrations/${CELL}/extrinsics.yaml -- the cell profile will refuse to start"
++fi
++
++echo "display"
++[ -n "${DISPLAY:-}" ] && ok "DISPLAY=${DISPLAY}" || warn "DISPLAY unset (GUI services will fail)"
++[ -f /tmp/.docker.xauth ] && ok "xauth cookie present" || warn "run: make x11"
++
++echo "nvidia (only needed for the perception profile)"
++if command -v nvidia-smi >/dev/null; then
++  ok "driver $(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)"
++  docker info 2>/dev/null | grep -qi nvidia && ok "nvidia container runtime registered" \
++    || warn "nvidia runtime not visible to docker"
++else
++  warn "no nvidia-smi (fine unless you run the perception profile)"
++fi
++
++echo
++[ "$fail" -eq 0 ] && echo "no blocking problems" || echo "blocking problems above"
++exit "$fail"
+diff --git a/scripts/promote_calibration.py b/scripts/promote_calibration.py
+new file mode 100755
+index 0000000..42f270e
+--- /dev/null
++++ b/scripts/promote_calibration.py
+@@ -0,0 +1,199 @@
++#!/usr/bin/env python3
++"""Promote an easy_handeye2 result into a cell's extrinsics.yaml.
++
++This is the seam between the calibration producer (runs twice a year, needs a
++GUI and the whole rig powered up) and the consumer (runs on every boot, needs
++seven numbers). Keeping it a discrete, auditable step -- rather than having the
++runtime read .calib files directly -- means a bad calibration cannot silently
++propagate into every stack the moment it is saved.
++
++Usage:
++    scripts/promote_calibration.py \\
++        --calib ~/.ros2/easy_handeye2/calibrations/ur5e_d435_eob.calib \\
++        --cell  purdue-ur5e-01
++
++    # inspect without writing
++    scripts/promote_calibration.py --calib ... --cell ... --dry-run
++
++The previous extrinsics.yaml is archived alongside, timestamped, before being
++replaced. Rolling back a calibration that turned out worse than the old one
++should never require git archaeology.
++"""
++
++from __future__ import annotations
++
++import argparse
++import datetime as dt
++import math
++import shutil
++import sys
++from pathlib import Path
++
++try:
++    import yaml
++except ImportError:  # pragma: no cover
++    sys.exit('pyyaml required: pip install pyyaml')
++
++REPO_ROOT = Path(__file__).resolve().parent.parent
++
++
++def find_transform(doc):
++    """Locate the transform in a .calib file without hard-coding its schema.
++
++    easy_handeye2's on-disk format has moved between versions. Rather than
++    pinning to one layout, walk the document for the first mapping that looks
++    like a transform. If upstream renames its keys again, this keeps working.
++    """
++    stack = [doc]
++    while stack:
++        node = stack.pop(0)
++        if isinstance(node, dict):
++            keys = set(node)
++            if {'translation', 'rotation'} <= keys:
++                return node
++            if {'x', 'y', 'z', 'qx', 'qy', 'qz', 'qw'} <= keys:
++                return {
++                    'translation': {k: node[k] for k in 'xyz'},
++                    'rotation': {
++                        'x': node['qx'], 'y': node['qy'],
++                        'z': node['qz'], 'w': node['qw'],
++                    },
++                }
++            stack.extend(node.values())
++        elif isinstance(node, list):
++            stack.extend(node)
++    return None
++
++
++def find_frames(doc, calib_type_hint=None):
++    """Pull parent/child frame names out of the .calib parameters block."""
++    stack, params = [doc], {}
++    while stack:
++        node = stack.pop(0)
++        if isinstance(node, dict):
++            for key in ('calibration_type', 'robot_base_frame',
++                        'robot_effector_frame', 'tracking_base_frame',
++                        'tracking_marker_frame', 'name'):
++                if key in node and isinstance(node[key], str):
++                    params.setdefault(key, node[key])
++            stack.extend(node.values())
++        elif isinstance(node, list):
++            stack.extend(node)
++
++    calib_type = calib_type_hint or params.get('calibration_type', '')
++    tracking_base = params.get('tracking_base_frame', 'camera_optical_frame')
++
++    # eye_on_base solves base -> camera; eye_in_hand solves flange -> camera.
++    if 'in_hand' in calib_type:
++        parent = params.get('robot_effector_frame', 'tool0')
++    else:
++        parent = params.get('robot_base_frame', 'base_link')
++
++    return parent, tracking_base, params
++
++
++def main() -> int:
++    ap = argparse.ArgumentParser(description=__doc__,
++                                 formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument('--calib', required=True, type=Path,
++                    help='Path to the .calib produced by easy_handeye2.')
++    ap.add_argument('--cell', required=True,
++                    help='Cell name; writes calibrations/<cell>/extrinsics.yaml.')
++    ap.add_argument('--calibrations-dir', type=Path,
++                    default=REPO_ROOT / 'calibrations')
++    ap.add_argument('--calibration-type', default=None,
++                    help='Override if the .calib does not record it.')
++    ap.add_argument('--dry-run', action='store_true')
++    args = ap.parse_args()
++
++    if not args.calib.is_file():
++        return err(f'no such file: {args.calib}')
++
++    doc = yaml.safe_load(args.calib.read_text()) or {}
++    transform = find_transform(doc)
++    if transform is None:
++        return err(f'could not find a transform in {args.calib}\n'
++                   f'  parsed keys: {sorted(doc)}')
++
++    parent, child, params = find_frames(doc, args.calibration_type)
++    t = transform['translation']
++    r = transform['rotation']
++
++    qx, qy, qz, qw = (float(r[k]) for k in ('x', 'y', 'z', 'w'))
++    norm = math.hypot(math.hypot(qx, qy), math.hypot(qz, qw))
++    if abs(norm - 1.0) > 1e-3:
++        print(f'  warn: quaternion norm {norm:.6f}, renormalising')
++        qx, qy, qz, qw = (v / norm for v in (qx, qy, qz, qw))
++
++    dist = math.sqrt(sum(float(t[k]) ** 2 for k in ('x', 'y', 'z')))
++    print(f'  {parent} -> {child}')
++    print(f'  translation  {float(t["x"]):+.4f} {float(t["y"]):+.4f} '
++          f'{float(t["z"]):+.4f}   (|t| = {dist:.4f} m)')
++    print(f'  rotation     {qx:+.5f} {qy:+.5f} {qz:+.5f} {qw:+.5f}')
++
++    # A camera 4 m from the robot base, or 2 cm from it, is almost always a
++    # frame-convention mistake rather than a real measurement.
++    if dist < 0.02 or dist > 4.0:
++        print(f'  WARN: |t| = {dist:.3f} m is implausible for a bench cell. '
++              f'Check that you did not mix base_link with base.')
++
++    entry = {
++        'parent': parent,
++        'child': child,
++        'translation': {k: round(float(t[k]), 6) for k in ('x', 'y', 'z')},
++        'rotation': {'x': round(qx, 8), 'y': round(qy, 8),
++                     'z': round(qz, 8), 'w': round(qw, 8)},
++        'source': args.calib.name,
++        'promoted_utc': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
++        'calibration_type': params.get('calibration_type', args.calibration_type or 'unknown'),
++    }
++
++    cell_dir = args.calibrations_dir / args.cell
++    out = cell_dir / 'extrinsics.yaml'
++
++    existing = {'extrinsics': []}
++    if out.is_file():
++        existing = yaml.safe_load(out.read_text()) or {'extrinsics': []}
++
++    # Replace any existing entry for the same parent/child pair, keep the rest.
++    kept = [e for e in existing.get('extrinsics', [])
++            if not (e.get('parent') == parent and e.get('child') == child)]
++    if len(kept) != len(existing.get('extrinsics', [])):
++        print(f'  replacing existing {parent} -> {child} entry')
++    merged = {'extrinsics': kept + [entry]}
++
++    if args.dry_run:
++        print('\n--- dry run, would write ---')
++        print(yaml.safe_dump(merged, sort_keys=False))
++        return 0
++
++    cell_dir.mkdir(parents=True, exist_ok=True)
++
++    # Archive the .calib itself, date-stamped. Calibration results are data:
++    # commit them, never overwrite them.
++    stamp = dt.datetime.now().strftime('%Y-%m-%d')
++    shutil.copy2(args.calib, cell_dir / f'{stamp}_{args.calib.name}')
++
++    if out.is_file():
++        backup = cell_dir / f'extrinsics.{stamp}.bak.yaml'
++        shutil.copy2(out, backup)
++        print(f'  previous extrinsics archived -> {backup.name}')
++
++    out.write_text(
++        '# Generated by scripts/promote_calibration.py -- edit by hand only if\n'
++        '# you are prepared to explain the numbers six months from now.\n'
++        + yaml.safe_dump(merged, sort_keys=False)
++    )
++    print(f'\nwrote {out}')
++    print('restart the cell profile to pick it up:')
++    print(f'  docker compose --profile cell up -d --force-recreate cell')
++    return 0
++
++
++def err(msg: str) -> int:
++    print(f'error: {msg}', file=sys.stderr)
++    return 1
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/scripts/setup_cell.sh b/scripts/setup_cell.sh
+new file mode 100755
+index 0000000..8b7e8ca
+--- /dev/null
++++ b/scripts/setup_cell.sh
+@@ -0,0 +1,32 @@
++#!/usr/bin/env bash
++# Point .env at this machine's cell config, creating one from the template if
++# this is a new bench. A machine's identity lives in cells/<name>.env; the repo
++# itself is identical everywhere.
++set -euo pipefail
++
++CELL="${1:-$(hostname)}"
++ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++TARGET="${ROOT}/cells/${CELL}.env"
++
++if [ ! -f "${TARGET}" ]; then
++  echo "no cells/${CELL}.env -- creating from the example"
++  sed -e "s/^CELL_NAME=.*/CELL_NAME=${CELL}/" \
++      "${ROOT}/cells/example-ur5e-01.env" > "${TARGET}"
++  echo "EDIT cells/${CELL}.env before running anything: robot IP, camera"
++  echo "serial, marker size, and COMPOSE_PROFILES are all machine-specific."
++fi
++
++ln -sfn "cells/${CELL}.env" "${ROOT}/.env"
++
++# UID/GID must match the host user or the bind-mounted src/ fills with
++# root-owned build artefacts.
++if grep -q '^HOST_UID=' "${TARGET}"; then
++  sed -i "s/^HOST_UID=.*/HOST_UID=$(id -u)/" "${TARGET}"
++  sed -i "s/^HOST_GID=.*/HOST_GID=$(id -g)/" "${TARGET}"
++else
++  printf '\nHOST_UID=%s\nHOST_GID=%s\n' "$(id -u)" "$(id -g)" >> "${TARGET}"
++fi
++
++mkdir -p "${ROOT}/calibrations/${CELL}"
++echo ".env -> cells/${CELL}.env"
++grep -E '^(CELL_NAME|COMPOSE_PROFILES|ROBOT_IP|HOST_UID)=' "${TARGET}" || true
+diff --git a/scripts/x11_setup.sh b/scripts/x11_setup.sh
+new file mode 100755
+index 0000000..f9431e1
+--- /dev/null
++++ b/scripts/x11_setup.sh
+@@ -0,0 +1,14 @@
++#!/usr/bin/env bash
++# Prepare an xauth cookie for the GUI containers instead of `xhost +`, which
++# opens your X server to anything running on the box.
++set -euo pipefail
++
++XAUTH=/tmp/.docker.xauth
++: "${DISPLAY:?DISPLAY is not set -- are you on a headless session?}"
++
++touch "${XAUTH}"
++# Re-stamp with a wildcard family so the cookie matches from inside the
++# container's network namespace.
++xauth nlist "${DISPLAY}" | sed -e 's/^..../ffff/' | xauth -f "${XAUTH}" nmerge -
++chmod 644 "${XAUTH}"
++echo "xauth cookie ready at ${XAUTH} for DISPLAY=${DISPLAY}"
+diff --git a/src/cell_description/cell_description/__init__.py b/src/cell_description/cell_description/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/src/cell_description/cell_description/extrinsics_publisher.py b/src/cell_description/cell_description/extrinsics_publisher.py
+new file mode 100644
+index 0000000..6e76a4a
+--- /dev/null
++++ b/src/cell_description/cell_description/extrinsics_publisher.py
+@@ -0,0 +1,144 @@
++"""Publish every calibrated extrinsic in a cell as static TF.
++
++Why this exists instead of easy_handeye2's publish.launch.py:
++
++  Calibration has a producer/consumer split. The producer (easy_handeye2 GUI)
++  runs a few times a year, interactively, with the arm and camera up. The
++  consumer runs on every boot of every stack and needs nothing but the numbers.
++
++  Coupling the consumer to the calibration package means every stack that wants
++  to know where the camera is drags in a Qt GUI and the .calib file format.
++  A flat YAML of named transforms is a better contract: MoveIt reads TF, rviz
++  reads TF, and the ZMQ sidecars can parse the same YAML directly without ROS.
++
++Expected file (see config/extrinsics.example.yaml):
++
++    extrinsics:
++      - parent: base_link
++        child: camera_color_optical_frame
++        translation: {x: 0.61, y: -0.19, z: 0.83}
++        rotation: {x: 0.0, y: 0.7071, z: 0.0, w: 0.7071}   # quaternion, xyzw
++        source: 2026-08-14_d435_eob.calib                   # provenance
++"""
++
++import math
++import os
++import sys
++
++import rclpy
++import yaml
++from geometry_msgs.msg import TransformStamped
++from rclpy.node import Node
++from tf2_ros import StaticTransformBroadcaster
++
++QUAT_TOL = 1e-3
++
++
++def _quat_from_entry(entry: dict) -> tuple:
++    """Accept either a quaternion or roll/pitch/yaw, return (x, y, z, w)."""
++    if 'rotation' in entry:
++        r = entry['rotation']
++        return (float(r['x']), float(r['y']), float(r['z']), float(r['w']))
++
++    if 'rpy' in entry:
++        roll, pitch, yaw = (float(v) for v in entry['rpy'])
++        cr, sr = math.cos(roll / 2.0), math.sin(roll / 2.0)
++        cp, sp = math.cos(pitch / 2.0), math.sin(pitch / 2.0)
++        cy, sy = math.cos(yaw / 2.0), math.sin(yaw / 2.0)
++        return (
++            sr * cp * cy - cr * sp * sy,
++            cr * sp * cy + sr * cp * sy,
++            cr * cp * sy - sr * sp * cy,
++            cr * cp * cy + sr * sp * sy,
++        )
++
++    raise KeyError("entry needs either 'rotation' (quaternion) or 'rpy'")
++
++
++class ExtrinsicsPublisher(Node):
++
++    def __init__(self):
++        super().__init__('extrinsics_publisher')
++
++        self.declare_parameter('extrinsics_file', '')
++        path = self.get_parameter('extrinsics_file').value
++
++        if not path:
++            self.get_logger().fatal('extrinsics_file parameter is empty')
++            raise SystemExit(2)
++
++        if not os.path.isfile(path):
++            # Fail loudly. A cell running with no extrinsics looks fine in rviz
++            # right up until something reaches for an object and misses.
++            self.get_logger().fatal(
++                f'no extrinsics at {path}. Run the calib profile and promote '
++                f'the result with scripts/promote_calibration.py.'
++            )
++            raise SystemExit(2)
++
++        with open(path, 'r') as handle:
++            doc = yaml.safe_load(handle) or {}
++
++        entries = doc.get('extrinsics', [])
++        if not entries:
++            self.get_logger().fatal(f'{path} contains no "extrinsics:" list')
++            raise SystemExit(2)
++
++        self._broadcaster = StaticTransformBroadcaster(self)
++        stamp = self.get_clock().now().to_msg()
++        transforms = []
++
++        for entry in entries:
++            qx, qy, qz, qw = _quat_from_entry(entry)
++            norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
++            if abs(norm - 1.0) > QUAT_TOL:
++                # Silently renormalising hides upstream bugs; say so, then fix.
++                self.get_logger().warn(
++                    f"{entry['parent']} -> {entry['child']}: quaternion norm "
++                    f'{norm:.6f}, renormalising'
++                )
++                qx, qy, qz, qw = (v / norm for v in (qx, qy, qz, qw))
++
++            tf = TransformStamped()
++            tf.header.stamp = stamp
++            tf.header.frame_id = entry['parent']
++            tf.child_frame_id = entry['child']
++            t = entry['translation']
++            tf.transform.translation.x = float(t['x'])
++            tf.transform.translation.y = float(t['y'])
++            tf.transform.translation.z = float(t['z'])
++            tf.transform.rotation.x = qx
++            tf.transform.rotation.y = qy
++            tf.transform.rotation.z = qz
++            tf.transform.rotation.w = qw
++            transforms.append(tf)
++
++            self.get_logger().info(
++                f"{entry['parent']} -> {entry['child']}  "
++                f"[{entry.get('source', 'no provenance recorded')}]"
++            )
++
++        self._broadcaster.sendTransform(transforms)
++        self.get_logger().info(f'published {len(transforms)} static transforms')
++
++
++def main(argv=None):
++    rclpy.init(args=argv)
++    try:
++        node = ExtrinsicsPublisher()
++    except SystemExit as exc:
++        rclpy.shutdown()
++        return int(exc.code or 1)
++    try:
++        rclpy.spin(node)
++    except KeyboardInterrupt:
++        pass
++    finally:
++        node.destroy_node()
++        if rclpy.ok():
++            rclpy.shutdown()
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/src/cell_description/config/extrinsics.example.yaml b/src/cell_description/config/extrinsics.example.yaml
+new file mode 100644
+index 0000000..576a67c
+--- /dev/null
++++ b/src/cell_description/config/extrinsics.example.yaml
+@@ -0,0 +1,18 @@
++# Copy to calibrations/<cell-name>/extrinsics.yaml and fill in from a real
++# calibration. scripts/promote_calibration.py writes this format for you.
++#
++# Rotation is a quaternion in xyzw order. `rpy:` (radians) is also accepted.
++# `source:` is provenance and is not optional in practice -- six months from
++# now you will want to know which run produced a number you no longer trust.
++
++extrinsics:
++  - parent: base_link
++    child: camera_color_optical_frame
++    translation: {x: 0.0, y: 0.0, z: 0.0}
++    rotation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
++    source: PLACEHOLDER -- not calibrated
++
++  # Eye-in-hand results go the other way round:
++  # - parent: tool0
++  #   child: camera_color_optical_frame
++  #   ...
+diff --git a/src/cell_description/launch/extrinsics.launch.py b/src/cell_description/launch/extrinsics.launch.py
+new file mode 100644
+index 0000000..ce64518
+--- /dev/null
++++ b/src/cell_description/launch/extrinsics.launch.py
+@@ -0,0 +1,25 @@
++"""Publish the cell's calibrated extrinsics as static TF."""
++
++from launch import LaunchDescription
++from launch.actions import DeclareLaunchArgument
++from launch.substitutions import LaunchConfiguration
++from launch_ros.actions import Node
++
++
++def generate_launch_description():
++    extrinsics_file = LaunchConfiguration('extrinsics_file')
++
++    return LaunchDescription([
++        DeclareLaunchArgument(
++            'extrinsics_file',
++            description='Absolute path to the cell extrinsics YAML. '
++                        'Conventionally /calibrations/<cell>/extrinsics.yaml.',
++        ),
++        Node(
++            package='cell_description',
++            executable='extrinsics_publisher',
++            name='extrinsics_publisher',
++            output='screen',
++            parameters=[{'extrinsics_file': extrinsics_file}],
++        ),
++    ])
+diff --git a/src/cell_description/package.xml b/src/cell_description/package.xml
+new file mode 100644
+index 0000000..9f94c80
+--- /dev/null
++++ b/src/cell_description/package.xml
+@@ -0,0 +1,23 @@
++<?xml version="1.0"?>
++<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
++<package format="3">
++  <name>cell_description</name>
++  <version>0.1.0</version>
++  <description>
++    Single source of truth for a robot cell's static geometry: every calibrated
++    extrinsic in the cell, published as static TF. Consumed by MoveIt, rviz,
++    and the ZMQ perception sidecars alike.
++  </description>
++  <maintainer email="albus@example.com">Albus</maintainer>
++  <license>MIT</license>
++
++  <exec_depend>rclpy</exec_depend>
++  <exec_depend>tf2_ros</exec_depend>
++  <exec_depend>geometry_msgs</exec_depend>
++  <exec_depend>launch</exec_depend>
++  <exec_depend>launch_ros</exec_depend>
++
++  <export>
++    <build_type>ament_python</build_type>
++  </export>
++</package>
+diff --git a/src/cell_description/resource/cell_description b/src/cell_description/resource/cell_description
+new file mode 100644
+index 0000000..e69de29
+diff --git a/src/cell_description/setup.cfg b/src/cell_description/setup.cfg
+new file mode 100644
+index 0000000..e893534
+--- /dev/null
++++ b/src/cell_description/setup.cfg
+@@ -0,0 +1,4 @@
++[develop]
++script_dir=$base/lib/cell_description
++[install]
++install_scripts=$base/lib/cell_description
+diff --git a/src/cell_description/setup.py b/src/cell_description/setup.py
+new file mode 100644
+index 0000000..0f15c42
+--- /dev/null
++++ b/src/cell_description/setup.py
+@@ -0,0 +1,28 @@
++from glob import glob
++
++from setuptools import find_packages, setup
++
++package_name = 'cell_description'
++
++setup(
++    name=package_name,
++    version='0.1.0',
++    packages=find_packages(exclude=['test']),
++    data_files=[
++        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
++        ('share/' + package_name, ['package.xml']),
++        ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
++        ('share/' + package_name + '/config', glob('config/*.yaml')),
++    ],
++    install_requires=['setuptools'],
++    zip_safe=True,
++    maintainer='Albus',
++    maintainer_email='albus@example.com',
++    description='Static geometry and calibrated extrinsics for a robot cell.',
++    license='MIT',
++    entry_points={
++        'console_scripts': [
++            'extrinsics_publisher = cell_description.extrinsics_publisher:main',
++        ],
++    },
++)
+diff --git a/src/handeye_bringup/handeye_bringup/__init__.py b/src/handeye_bringup/handeye_bringup/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/src/handeye_bringup/launch/calibrate.launch.py b/src/handeye_bringup/launch/calibrate.launch.py
+new file mode 100644
+index 0000000..0a8934c
+--- /dev/null
++++ b/src/handeye_bringup/launch/calibrate.launch.py
+@@ -0,0 +1,81 @@
++"""Tracker + easy_handeye2 in one launch, for when you don't want two terminals.
++
++Assumes the robot driver and camera are already up (compose profiles `ur` and
++`camera`). This launch deliberately does NOT start them: the calibration stack
++consumes TF and images, and coupling it to a specific driver would defeat the
++point of keeping it hardware-independent.
++
++Sampling advice that actually determines whether the result is any good:
++
++  Rotate the flange as far as joint limits allow about all three axes, in both
++  directions, across ~15-20 poses. Translation-only samples leave the rotation
++  estimate rank deficient and the solve will be confidently wrong. Keep the
++  target as close to the camera as focus allows.
++"""
++
++import os
++
++from ament_index_python.packages import get_package_share_directory
++from launch import LaunchDescription
++from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
++from launch.launch_description_sources import PythonLaunchDescriptionSource
++from launch.substitutions import LaunchConfiguration
++
++ARGS = [
++    ('calibration_type', 'eye_on_base',
++     'eye_on_base: camera fixed to the world, marker on the flange. '
++     'eye_in_hand: camera on the flange, marker fixed to the table.'),
++    ('name', 'default_eob',
++     'Identifier for this calibration. The same name must be used to publish it.'),
++    ('robot_base_frame', 'base_link',
++     'UR note: base_link is the URDF root; base is the ROS-Industrial rotated '
++     'frame. Mixing them costs you a 180 degree yaw.'),
++    ('robot_effector_frame', 'tool0', 'Flange frame.'),
++    ('marker_id', '582', ''),
++    ('marker_size', '0.05', 'Metres.'),
++    ('marker_frame', 'aruco_marker_frame', ''),
++    ('camera_optical_frame', 'camera_color_optical_frame', ''),
++    ('image_topic', '/camera/camera/color/image_raw', ''),
++    ('camera_info_topic', '/camera/camera/color/camera_info', ''),
++    ('freehand_robot_movement', 'true',
++     'true = you jog the arm yourself. false = easy_handeye2 drives it via '
++     'MoveIt, which needs the moveit profile up.'),
++]
++
++
++def generate_launch_description():
++    declared = [
++        DeclareLaunchArgument(n, default_value=d, description=desc)
++        for n, d, desc in ARGS
++    ]
++
++    tracker = IncludeLaunchDescription(
++        PythonLaunchDescriptionSource(os.path.join(
++            get_package_share_directory('handeye_bringup'),
++            'launch', 'tracker.launch.py')),
++        launch_arguments={
++            'marker_id': LaunchConfiguration('marker_id'),
++            'marker_size': LaunchConfiguration('marker_size'),
++            'marker_frame': LaunchConfiguration('marker_frame'),
++            'camera_optical_frame': LaunchConfiguration('camera_optical_frame'),
++            'image_topic': LaunchConfiguration('image_topic'),
++            'camera_info_topic': LaunchConfiguration('camera_info_topic'),
++        }.items(),
++    )
++
++    handeye = IncludeLaunchDescription(
++        PythonLaunchDescriptionSource(os.path.join(
++            get_package_share_directory('easy_handeye2'),
++            'launch', 'calibrate.launch.py')),
++        launch_arguments={
++            'calibration_type': LaunchConfiguration('calibration_type'),
++            'name': LaunchConfiguration('name'),
++            'robot_base_frame': LaunchConfiguration('robot_base_frame'),
++            'robot_effector_frame': LaunchConfiguration('robot_effector_frame'),
++            'tracking_base_frame': LaunchConfiguration('camera_optical_frame'),
++            'tracking_marker_frame': LaunchConfiguration('marker_frame'),
++            'freehand_robot_movement': LaunchConfiguration('freehand_robot_movement'),
++        }.items(),
++    )
++
++    return LaunchDescription(declared + [tracker, handeye])
+diff --git a/src/handeye_bringup/launch/tracker.launch.py b/src/handeye_bringup/launch/tracker.launch.py
+new file mode 100644
+index 0000000..80d0a0b
+--- /dev/null
++++ b/src/handeye_bringup/launch/tracker.launch.py
+@@ -0,0 +1,56 @@
++"""ArUco marker tracker, wired to publish tracking_marker_frame into TF.
++
++The aruco_ros `single` node is instantiated directly rather than via upstream's
++single.launch.py, because the upstream launch argument names have drifted
++between distros while the NODE parameter names have been stable. Fewer moving
++parts to break on a distro bump.
++"""
++
++from launch import LaunchDescription
++from launch.actions import DeclareLaunchArgument
++from launch.substitutions import LaunchConfiguration
++from launch_ros.actions import Node
++
++ARGS = [
++    ('marker_id', '582', 'ArUco id printed on the target.'),
++    ('marker_size', '0.05',
++     'Black square edge length in METRES. Measure the printed sheet -- '
++     'printer scaling lies, and a 2% size error is a 2% range bias.'),
++    ('marker_frame', 'aruco_marker_frame', 'TF frame the detector publishes.'),
++    ('camera_optical_frame', 'camera_color_optical_frame',
++     'Optical frame of the camera. NOTE: no leading slash -- ROS 2 tf2 '
++     'rejects them, and upstream docs still show the ROS 1 style.'),
++    ('image_topic', '/camera/camera/color/image_raw', 'Rectified colour image.'),
++    ('camera_info_topic', '/camera/camera/color/camera_info', 'Intrinsics.'),
++    ('corner_refinement', 'LINES',
++     'NONE | HARRIS | LINES | SUBPIX. LINES is a good default for calibration.'),
++]
++
++
++def generate_launch_description():
++    declared = [
++        DeclareLaunchArgument(name, default_value=default, description=desc)
++        for name, default, desc in ARGS
++    ]
++
++    tracker = Node(
++        package='aruco_ros',
++        executable='single',
++        name='aruco_single',
++        output='screen',
++        parameters=[{
++            'image_is_rectified': True,
++            'marker_size': LaunchConfiguration('marker_size'),
++            'marker_id': LaunchConfiguration('marker_id'),
++            'reference_frame': LaunchConfiguration('camera_optical_frame'),
++            'camera_frame': LaunchConfiguration('camera_optical_frame'),
++            'marker_frame': LaunchConfiguration('marker_frame'),
++            'corner_refinement': LaunchConfiguration('corner_refinement'),
++        }],
++        remappings=[
++            ('/camera_info', LaunchConfiguration('camera_info_topic')),
++            ('/image', LaunchConfiguration('image_topic')),
++        ],
++    )
++
++    return LaunchDescription(declared + [tracker])
+diff --git a/src/handeye_bringup/package.xml b/src/handeye_bringup/package.xml
+new file mode 100644
+index 0000000..3787e88
+--- /dev/null
++++ b/src/handeye_bringup/package.xml
+@@ -0,0 +1,21 @@
++<?xml version="1.0"?>
++<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
++<package format="3">
++  <name>handeye_bringup</name>
++  <version>0.1.0</version>
++  <description>
++    Cell-specific glue for hand-eye calibration: marker tracker bring-up with
++    your frame names and topics baked in, plus a full calibrate stack.
++  </description>
++  <maintainer email="albus@example.com">Albus</maintainer>
++  <license>MIT</license>
++
++  <exec_depend>aruco_ros</exec_depend>
++  <exec_depend>easy_handeye2</exec_depend>
++  <exec_depend>launch</exec_depend>
++  <exec_depend>launch_ros</exec_depend>
++
++  <export>
++    <build_type>ament_python</build_type>
++  </export>
++</package>
+diff --git a/src/handeye_bringup/resource/handeye_bringup b/src/handeye_bringup/resource/handeye_bringup
+new file mode 100644
+index 0000000..e69de29
+diff --git a/src/handeye_bringup/setup.cfg b/src/handeye_bringup/setup.cfg
+new file mode 100644
+index 0000000..c35d027
+--- /dev/null
++++ b/src/handeye_bringup/setup.cfg
+@@ -0,0 +1,4 @@
++[develop]
++script_dir=$base/lib/handeye_bringup
++[install]
++install_scripts=$base/lib/handeye_bringup
+diff --git a/src/handeye_bringup/setup.py b/src/handeye_bringup/setup.py
+new file mode 100644
+index 0000000..fd8058d
+--- /dev/null
++++ b/src/handeye_bringup/setup.py
+@@ -0,0 +1,23 @@
++from glob import glob
++
++from setuptools import find_packages, setup
++
++package_name = 'handeye_bringup'
++
++setup(
++    name=package_name,
++    version='0.1.0',
++    packages=find_packages(exclude=['test']),
++    data_files=[
++        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
++        ('share/' + package_name, ['package.xml']),
++        ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
++    ],
++    install_requires=['setuptools'],
++    zip_safe=True,
++    maintainer='Albus',
++    maintainer_email='albus@example.com',
++    description='Hand-eye calibration bring-up.',
++    license='MIT',
++    entry_points={'console_scripts': []},
++)
+diff --git a/src/ros_zmq_bridge/launch/bridge.launch.py b/src/ros_zmq_bridge/launch/bridge.launch.py
+new file mode 100644
+index 0000000..e0555ce
+--- /dev/null
++++ b/src/ros_zmq_bridge/launch/bridge.launch.py
+@@ -0,0 +1,34 @@
++"""Bring up the ROS <-> ZMQ frame packet bridge."""
++
++from launch import LaunchDescription
++from launch.actions import DeclareLaunchArgument
++from launch.substitutions import LaunchConfiguration
++from launch_ros.actions import Node
++
++ARGS = [
++    ('bind_address', 'tcp://0.0.0.0:5680', 'ZMQ REP bind address.'),
++    ('color_topic', '/camera/camera/color/image_raw', ''),
++    ('depth_topic', '/camera/camera/aligned_depth_to_color/image_raw',
++     'Must be aligned to colour, or K will not apply to the depth image.'),
++    ('camera_info_topic', '/camera/camera/color/camera_info', ''),
++    ('camera_optical_frame', 'camera_color_optical_frame', ''),
++    ('base_frame', 'base_link', ''),
++    ('ee_frame', 'tool0', ''),
++    ('depth_scale', '0.001', 'Raw depth unit -> metres. 0.001 for RealSense.'),
++    ('sync_slop', '0.05', 'ApproximateTimeSynchronizer tolerance, seconds.'),
++]
++
++
++def generate_launch_description():
++    declared = [
++        DeclareLaunchArgument(n, default_value=d, description=desc)
++        for n, d, desc in ARGS
++    ]
++    node = Node(
++        package='ros_zmq_bridge',
++        executable='bridge_node',
++        name='ros_zmq_bridge',
++        output='screen',
++        parameters=[{n: LaunchConfiguration(n) for n, _, _ in ARGS}],
++    )
++    return LaunchDescription(declared + [node])
+diff --git a/src/ros_zmq_bridge/package.xml b/src/ros_zmq_bridge/package.xml
+new file mode 100644
+index 0000000..db8d687
+--- /dev/null
++++ b/src/ros_zmq_bridge/package.xml
+@@ -0,0 +1,24 @@
++<?xml version="1.0"?>
++<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
++<package format="3">
++  <name>ros_zmq_bridge</name>
++  <version>0.1.0</version>
++  <description>
++    The single node that speaks ROS on behalf of the CUDA perception sidecars.
++    Serves synchronised colour + depth + intrinsics + TF snapshots over ZMQ so
++    the sidecars never need rclpy.
++  </description>
++  <maintainer email="albus@example.com">Albus</maintainer>
++  <license>MIT</license>
++
++  <exec_depend>rclpy</exec_depend>
++  <exec_depend>sensor_msgs</exec_depend>
++  <exec_depend>cv_bridge</exec_depend>
++  <exec_depend>message_filters</exec_depend>
++  <exec_depend>tf2_ros</exec_depend>
++  <exec_depend>python3-numpy</exec_depend>
++
++  <export>
++    <build_type>ament_python</build_type>
++  </export>
++</package>
+diff --git a/src/ros_zmq_bridge/resource/ros_zmq_bridge b/src/ros_zmq_bridge/resource/ros_zmq_bridge
+new file mode 100644
+index 0000000..e69de29
+diff --git a/src/ros_zmq_bridge/ros_zmq_bridge/__init__.py b/src/ros_zmq_bridge/ros_zmq_bridge/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/src/ros_zmq_bridge/ros_zmq_bridge/bridge_node.py b/src/ros_zmq_bridge/ros_zmq_bridge/bridge_node.py
+new file mode 100644
+index 0000000..fd98ef1
+--- /dev/null
++++ b/src/ros_zmq_bridge/ros_zmq_bridge/bridge_node.py
+@@ -0,0 +1,204 @@
++"""Snapshot ROS state into a frame packet and serve it over ZMQ.
++
++THE POINT OF THIS FILE
++    Heavy CUDA perception (pose estimation, segmentation, mesh reconstruction,
++    collision-aware planning) has a dependency graph that fights with ROS's.
++    Installing rclpy into each of those containers means every one of them
++    inherits the ROS graph, and you end up debugging Docker builds instead of
++    robotics.
++
++    So: exactly one node speaks ROS. It gathers a synchronised colour + depth +
++    intrinsics + TF snapshot and hands it over the wire. The sidecars stay pure
++    compute -- they receive a packet and extrinsics as arguments and never
++    import rclpy.
++
++WIRE FORMAT (msgpack, REQ/REP)
++    Request:  {"cmd": "capture"}  |  {"cmd": "ping"}
++    Reply:    {
++        "ok": bool, "error": str|null, "stamp_ns": int, "seq": int,
++        "color":  {"h","w","encoding","data"},        # data = raw bytes
++        "depth":  {"h","w","encoding","data","scale"},# scale -> metres
++        "K": [9 floats, row-major], "D": [k1..],
++        "frames": {"camera_optical": str, "base": str, "ee": str},
++        "T_base_camera": [16 floats, row-major],      # extrinsic, from TF
++        "T_base_ee":     [16 floats, row-major],      # FK, from TF
++    }
++
++ALIGN THIS WITH YOUR EXISTING SCHEMA. If your sim-side capture script already
++emits frame packets, make this match it rather than the other way round -- the
++whole value is that sim and hardware produce byte-identical packets so the
++sidecars cannot tell which one they are talking to.
++"""
++
++from __future__ import annotations
++
++import threading
++
++import msgpack
++import numpy as np
++import rclpy
++import zmq
++from cv_bridge import CvBridge
++from message_filters import ApproximateTimeSynchronizer, Subscriber
++from rclpy.node import Node
++from rclpy.qos import QoSProfile, ReliabilityPolicy
++from sensor_msgs.msg import CameraInfo, Image
++from tf2_ros import Buffer, TransformListener
++
++
++def _matrix_from_tf(tf) -> list:
++    """TransformStamped -> row-major 4x4 as a flat list."""
++    t, q = tf.transform.translation, tf.transform.rotation
++    x, y, z, w = q.x, q.y, q.z, q.w
++    m = np.eye(4)
++    m[:3, :3] = np.array([
++        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
++        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
++        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
++    ])
++    m[:3, 3] = (t.x, t.y, t.z)
++    return m.flatten().tolist()
++
++
++class ZmqBridge(Node):
++
++    def __init__(self):
++        super().__init__('ros_zmq_bridge')
++
++        p = self.declare_parameters('', [
++            ('bind_address', 'tcp://0.0.0.0:5680'),
++            ('color_topic', '/camera/camera/color/image_raw'),
++            ('depth_topic', '/camera/camera/aligned_depth_to_color/image_raw'),
++            ('camera_info_topic', '/camera/camera/color/camera_info'),
++            ('camera_optical_frame', 'camera_color_optical_frame'),
++            ('base_frame', 'base_link'),
++            ('ee_frame', 'tool0'),
++            ('depth_scale', 0.001),
++            ('sync_slop', 0.05),
++        ])
++        self.cfg = {param.name: param.value for param in p}
++
++        self._bridge = CvBridge()
++        self._lock = threading.Lock()
++        self._latest = None
++        self._seq = 0
++
++        # Sensor data is best-effort by convention; matching it avoids the
++        # silent no-messages-ever failure mode.
++        qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
++
++        subs = [
++            Subscriber(self, Image, self.cfg['color_topic'], qos_profile=qos),
++            Subscriber(self, Image, self.cfg['depth_topic'], qos_profile=qos),
++            Subscriber(self, CameraInfo, self.cfg['camera_info_topic'], qos_profile=qos),
++        ]
++        self._sync = ApproximateTimeSynchronizer(
++            subs, queue_size=5, slop=float(self.cfg['sync_slop']))
++        self._sync.registerCallback(self._on_frame)
++
++        self._tf_buffer = Buffer()
++        self._tf_listener = TransformListener(self._tf_buffer, self)
++
++        ctx = zmq.Context.instance()
++        self._sock = ctx.socket(zmq.REP)
++        self._sock.bind(self.cfg['bind_address'])
++        self.get_logger().info(f"serving frame packets on {self.cfg['bind_address']}")
++
++        self._server = threading.Thread(target=self._serve, daemon=True)
++        self._server.start()
++
++    def _on_frame(self, color_msg, depth_msg, info_msg):
++        with self._lock:
++            self._latest = (color_msg, depth_msg, info_msg)
++
++    def _lookup(self, target: str, source: str):
++        """TF from source expressed in target. Returns None on failure."""
++        try:
++            return self._tf_buffer.lookup_transform(
++                target, source, rclpy.time.Time())
++        except Exception as exc:  # tf2 raises a family of exceptions
++            self.get_logger().warn(f'TF {target} <- {source}: {exc}')
++            return None
++
++    def _build_packet(self) -> dict:
++        with self._lock:
++            latest = self._latest
++
++        if latest is None:
++            return {'ok': False, 'error': 'no synchronised frame received yet'}
++
++        color_msg, depth_msg, info_msg = latest
++        color = self._bridge.imgmsg_to_cv2(color_msg, desired_encoding='rgb8')
++        depth = self._bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
++
++        base = self.cfg['base_frame']
++        cam = self.cfg['camera_optical_frame']
++        ee = self.cfg['ee_frame']
++
++        tf_cam = self._lookup(base, cam)
++        tf_ee = self._lookup(base, ee)
++        if tf_cam is None:
++            return {'ok': False,
++                    'error': f'no TF {base} <- {cam}. Is the cell profile up?'}
++
++        self._seq += 1
++        stamp = color_msg.header.stamp
++        return {
++            'ok': True,
++            'error': None,
++            'seq': self._seq,
++            'stamp_ns': int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec),
++            'color': {
++                'h': color.shape[0], 'w': color.shape[1],
++                'encoding': 'rgb8', 'data': color.tobytes(),
++            },
++            'depth': {
++                'h': depth.shape[0], 'w': depth.shape[1],
++                'encoding': str(depth.dtype), 'data': depth.tobytes(),
++                'scale': float(self.cfg['depth_scale']),
++            },
++            'K': list(info_msg.k),
++            'D': list(info_msg.d),
++            'frames': {'camera_optical': cam, 'base': base, 'ee': ee},
++            'T_base_camera': _matrix_from_tf(tf_cam),
++            'T_base_ee': _matrix_from_tf(tf_ee) if tf_ee else None,
++        }
++
++    def _serve(self):
++        while rclpy.ok():
++            try:
++                if not self._sock.poll(timeout=200):
++                    continue
++                req = msgpack.unpackb(self._sock.recv(), raw=False)
++                cmd = req.get('cmd', 'capture')
++                if cmd == 'ping':
++                    reply = {'ok': True, 'error': None}
++                elif cmd == 'capture':
++                    reply = self._build_packet()
++                else:
++                    reply = {'ok': False, 'error': f'unknown cmd: {cmd}'}
++                self._sock.send(msgpack.packb(reply, use_bin_type=True))
++            except Exception as exc:
++                self.get_logger().error(f'bridge error: {exc}')
++                try:
++                    self._sock.send(msgpack.packb(
++                        {'ok': False, 'error': str(exc)}, use_bin_type=True))
++                except zmq.ZMQError:
++                    pass
++
++
++def main(argv=None):
++    rclpy.init(args=argv)
++    node = ZmqBridge()
++    try:
++        rclpy.spin(node)
++    except KeyboardInterrupt:
++        pass
++    finally:
++        node.destroy_node()
++        if rclpy.ok():
++            rclpy.shutdown()
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/src/ros_zmq_bridge/setup.cfg b/src/ros_zmq_bridge/setup.cfg
+new file mode 100644
+index 0000000..66a62b8
+--- /dev/null
++++ b/src/ros_zmq_bridge/setup.cfg
+@@ -0,0 +1,4 @@
++[develop]
++script_dir=$base/lib/ros_zmq_bridge
++[install]
++install_scripts=$base/lib/ros_zmq_bridge
+diff --git a/src/ros_zmq_bridge/setup.py b/src/ros_zmq_bridge/setup.py
+new file mode 100644
+index 0000000..db2bed6
+--- /dev/null
++++ b/src/ros_zmq_bridge/setup.py
+@@ -0,0 +1,27 @@
++from glob import glob
++
++from setuptools import find_packages, setup
++
++package_name = 'ros_zmq_bridge'
++
++setup(
++    name=package_name,
++    version='0.1.0',
++    packages=find_packages(exclude=['test']),
++    data_files=[
++        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
++        ('share/' + package_name, ['package.xml']),
++        ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
++    ],
++    install_requires=['setuptools'],
++    zip_safe=True,
++    maintainer='Albus',
++    maintainer_email='albus@example.com',
++    description='ROS <-> ZMQ frame packet bridge.',
++    license='MIT',
++    entry_points={
++        'console_scripts': [
++            'bridge_node = ros_zmq_bridge.bridge_node:main',
++        ],
++    },
++)
+-- 
+2.43.0
+

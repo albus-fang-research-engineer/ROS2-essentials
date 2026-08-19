@@ -1,0 +1,303 @@
+From a11238b28196fd38a10f58bd0fa02ba70d2fd8ec Mon Sep 17 00:00:00 2001
+From: Albus <albus@example.com>
+Date: Wed, 19 Aug 2026 01:19:44 +0000
+Subject: [PATCH] Fix: host ROS_DISTRO leak silently built FROM
+ ros:noetic-ros-base
+
+A shell with ROS 1 sourced exports ROS_DISTRO=noetic. Both make's ?= and
+compose's ${VAR:-default} treat an exported shell variable as already-set,
+and compose additionally ranks the shell above .env -- so the bare ROS_DISTRO
+default was overridden in two independent places at once, and the base image
+resolved to ros:noetic-ros-base (where ros-noetic-rmw-cyclonedds-cpp does not
+exist, hence the apt failure).
+
+Rename every host-facing knob to R2E_*: R2E_DISTRO, R2E_DOMAIN_ID, R2E_RMW,
+R2E_CYCLONEDDS_URI. These become ROS_DISTRO / ROS_DOMAIN_ID / etc. only inside
+the container, where they are correct. Same trap would have hit ROS_DOMAIN_ID.
+
+Also:
+- Makefile prints a note when the shell exports a conflicting ROS_DISTRO.
+- require-* guards on run targets. These images are local-only, so a skipped
+  build surfaced as 'pull access denied for ros2-essentials/tools' rather than
+  'you never built it'.
+- make ws moves to a wsbuild service on the base image instead of the tools
+  image: ament_python packages build without their exec_depends present, and
+  each package only needs real deps in the image that runs it.
+- doctor.sh checks for leaked ROS_DISTRO, ROS_DOMAIN_ID, RMW_IMPLEMENTATION,
+  ROS_MASTER_URI, and an active conda env.
+---
+ Makefile                  | 43 +++++++++++++++++++++++++++++++--------
+ README.md                 | 11 ++++++++++
+ cells/example-ur5e-01.env | 12 +++++++----
+ docker-compose.yml        | 27 ++++++++++++++++--------
+ scripts/doctor.sh         | 16 +++++++++++++++
+ 5 files changed, 87 insertions(+), 22 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index f7e8944..6e8fb74 100644
+--- a/Makefile
++++ b/Makefile
+@@ -6,19 +6,35 @@
+ # ===========================================================================
+ 
+ SHELL := /bin/bash
+-ROS_DISTRO ?= humble
++
++# Host-facing knobs are R2E_* on purpose. A machine with ROS 1 sourced exports
++# ROS_DISTRO=noetic, and BOTH make's `?=` and compose's `${VAR:-default}` treat
++# an exported shell variable as already-set -- so a bare ROS_DISTRO here would
++# silently build FROM ros:noetic-ros-base. Same trap for ROS_DOMAIN_ID and
++# RMW_IMPLEMENTATION. Inside the containers these are still ROS_DISTRO etc.
++R2E_DISTRO ?= humble
+ TAG        ?= dev
+ HOST_UID   := $(shell id -u)
+ HOST_GID   := $(shell id -g)
+ CELL       ?= $(shell hostname)
+ 
+-BUILD_ARGS = --build-arg ROS_DISTRO=$(ROS_DISTRO) \
++BUILD_ARGS = --build-arg ROS_DISTRO=$(R2E_DISTRO) \
+              --build-arg TAG=$(TAG) \
+              --build-arg HOST_UID=$(HOST_UID) \
+              --build-arg HOST_GID=$(HOST_GID)
+ 
+ .DEFAULT_GOAL := help
+ 
++ifneq ($(origin ROS_DISTRO),undefined)
++  ifneq ($(ROS_DISTRO),$(R2E_DISTRO))
++    $(info )
++    $(info note: your shell exports ROS_DISTRO=$(ROS_DISTRO) (a sourced ROS install).)
++    $(info       This repo ignores it and builds $(R2E_DISTRO). If you meant to)
++    $(info       change the target distro, set R2E_DISTRO, not ROS_DISTRO.)
++    $(info )
++  endif
++endif
++
+ # --- setup ------------------------------------------------------------------
+ 
+ .PHONY: setup
+@@ -73,9 +89,18 @@ perception: base ## ROS side of the ZMQ perception boundary
+ 
+ # --- workspace --------------------------------------------------------------
+ 
++# Guard: compose will try to PULL a missing local image and fail with an
++# unhelpful "pull access denied" instead of saying the build never ran.
++.PHONY: require-%
++require-%:
++	@docker image inspect ros2-essentials/$*:$(TAG) >/dev/null 2>&1 || { \
++		echo "missing image ros2-essentials/$*:$(TAG)"; \
++		echo "  these images are local-only; compose cannot pull them."; \
++		echo "  run: make $*   (or: make build)"; exit 1; }
++
+ .PHONY: ws
+-ws: ## colcon build the bind-mounted workspace in src/
+-	docker compose --profile shell run --rm shell ws-build
++ws: require-base ## colcon build the bind-mounted workspace in src/
++	docker compose --profile build run --rm wsbuild
+ 
+ .PHONY: ws-clean
+ ws-clean: ## Remove colcon artefacts from src/ (they are gitignored, not tracked)
+@@ -100,17 +125,17 @@ logs: ## Tail all logs
+ 	docker compose logs -f --tail=100
+ 
+ .PHONY: shell
+-shell: ## Interactive shell in the tools image
++shell: require-tools ## Interactive shell in the tools image
+ 	docker compose --profile shell run --rm shell bash
+ 
+ # --- calibration workflow ---------------------------------------------------
+ 
+ .PHONY: kinematics
+-kinematics: ## ONE-SHOT: pull the arm's factory DH deltas into config/
++kinematics: require-ur ## ONE-SHOT: pull the arm's factory DH deltas into config/
+ 	docker compose --profile oneshot run --rm ur-kinematics
+ 
+ .PHONY: calibrate
+-calibrate: ## Interactive hand-eye calibration (needs ur + camera already up)
++calibrate: require-calibration ## Interactive hand-eye calibration (needs ur + camera up)
+ 	docker compose --profile calib up
+ 
+ .PHONY: promote
+@@ -119,13 +144,13 @@ promote: ## Promote a .calib into the cell extrinsics: make promote CALIB=path/t
+ 	scripts/promote_calibration.py --calib "$(CALIB)" --cell "$(CELL)"
+ 
+ .PHONY: demo
+-demo: ## Offline calibration smoke test, no hardware
++demo: require-calibration ## Offline calibration smoke test, no hardware
+ 	docker compose --profile demo up handeye-demo
+ 
+ # --- introspection ----------------------------------------------------------
+ 
+ .PHONY: tf
+-tf: ## Dump the current TF tree to /tmp
++tf: require-tools ## Dump the current TF tree to /tmp
+ 	docker compose --profile shell run --rm shell \
+ 		bash -lc 'cd /tmp && ros2 run tf2_tools view_frames'
+ 
+diff --git a/README.md b/README.md
+index 5543826..b09bc77 100644
+--- a/README.md
++++ b/README.md
+@@ -126,6 +126,17 @@ docker compose --profile cell up -d --force-recreate cell
+   extra samples will average away.
+ - **Two NICs, one Cyclone.** With a robot NIC and a lab NIC, pin the interface
+   in `config/cyclonedds.xml` or discovery will intermittently pick wrong.
++- **A sourced ROS install on the host poisons the build.** If your `.bashrc`
++  sources `/opt/ros/noetic/setup.bash`, your shell exports `ROS_DISTRO=noetic`
++  — and both make's `?=` and compose's `${VAR:-default}` treat an exported
++  variable as already-set. A bare `ROS_DISTRO` in this repo would silently
++  build `FROM ros:noetic-ros-base`. That is why every host-facing knob here is
++  `R2E_*` (`R2E_DISTRO`, `R2E_DOMAIN_ID`, `R2E_RMW`, `R2E_CYCLONEDDS_URI`) and
++  only becomes `ROS_DISTRO` etc. inside the container. `make doctor` flags it.
++- **These images are local-only.** Compose responds to a missing image by
++  trying to pull it, so a failed build surfaces later as `pull access denied
++  for ros2-essentials/...`. The `require-*` guards in the Makefile catch this
++  and tell you which `make` target you actually skipped.
+ - **`HOST_UID` must match you.** Otherwise `src/` fills with root-owned
+   `build/` and `install/` trees. `make doctor` checks this.
+ - **CUDA 11.4 hosts cannot run `base-cuda`.** NVIDIA ships no 22.04 image below
+diff --git a/cells/example-ur5e-01.env b/cells/example-ur5e-01.env
+index 4d2b89e..e2bfaf4 100644
+--- a/cells/example-ur5e-01.env
++++ b/cells/example-ur5e-01.env
+@@ -15,19 +15,23 @@ CELL_NAME=example-ur5e-01
+ #   perception,cell       GPU box
+ COMPOSE_PROFILES=ur,camera,cell
+ 
++# NOTE: these are R2E_* rather than ROS_DISTRO / ROS_DOMAIN_ID / etc. on
++# purpose. A shell with ROS sourced exports those names, and both make and
++# docker compose let an exported shell variable beat a default OR this file.
++# They are renamed to ROS_* only inside the containers.
+ TAG=dev
+-ROS_DISTRO=humble
++R2E_DISTRO=humble
+ HOST_UID=1000
+ HOST_GID=1000
+ 
+ # --- DDS -------------------------------------------------------------------
+ # Pick a per-cell domain id so two benches on one lab LAN do not discover each
+ # other and fight over /joint_states.
+-ROS_DOMAIN_ID=42
+-RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
++R2E_DOMAIN_ID=42
++R2E_RMW=rmw_cyclonedds_cpp
+ # With a robot NIC and a lab NIC on the same host, discovery will otherwise
+ # pick one at random, intermittently, which is a miserable bug to chase.
+-CYCLONEDDS_URI=file:///config/cyclonedds.xml
++R2E_CYCLONEDDS_URI=file:///config/cyclonedds.xml
+ 
+ # --- robot -----------------------------------------------------------------
+ UR_TYPE=ur5e
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 759e0c1..a3ca440 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -23,9 +23,9 @@ x-ros: &ros
+   tty: true
+   restart: "no"
+   environment: &ros-env
+-    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+-    RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+-    CYCLONEDDS_URI: ${CYCLONEDDS_URI:-}
++    ROS_DOMAIN_ID: ${R2E_DOMAIN_ID:-42}
++    RMW_IMPLEMENTATION: ${R2E_RMW:-rmw_cyclonedds_cpp}
++    CYCLONEDDS_URI: ${R2E_CYCLONEDDS_URI:-}
+     CELL_NAME: ${CELL_NAME:-unnamed-cell}
+   volumes: &ros-vols
+     - ./src:/ws/src
+@@ -59,7 +59,7 @@ services:
+     build:
+       context: .
+       dockerfile: docker/modules/ur/Dockerfile
+-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
++      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}", TAG: "${TAG:-dev}",
+               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+     command: >
+       ros2 launch ur_robot_driver ur_control.launch.py
+@@ -106,7 +106,7 @@ services:
+     build:
+       context: .
+       dockerfile: docker/modules/realsense/Dockerfile
+-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
++      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}", TAG: "${TAG:-dev}",
+               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+     privileged: true
+     volumes:
+@@ -134,7 +134,7 @@ services:
+     build:
+       context: .
+       dockerfile: docker/modules/calibration/Dockerfile
+-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
++      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}", TAG: "${TAG:-dev}",
+               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+     command: >
+       ros2 launch handeye_bringup tracker.launch.py
+@@ -184,7 +184,7 @@ services:
+     build:
+       context: .
+       dockerfile: docker/base/Dockerfile
+-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}",
++      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}",
+               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+     command: >
+       ros2 launch cell_description extrinsics.launch.py
+@@ -201,7 +201,7 @@ services:
+     build:
+       context: .
+       dockerfile: docker/modules/perception/Dockerfile
+-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
++      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}", TAG: "${TAG:-dev}",
+               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+     command: >
+       ros2 launch ros_zmq_bridge bridge.launch.py
+@@ -222,7 +222,7 @@ services:
+     build:
+       context: .
+       dockerfile: docker/modules/tools/Dockerfile
+-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
++      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}", TAG: "${TAG:-dev}",
+               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
+     command: rviz2 -d /config/rviz/${RVIZ_CONFIG:-cell.rviz}
+ 
+@@ -237,3 +237,12 @@ services:
+     profiles: [shell]
+     image: ros2-essentials/tools:${TAG:-dev}
+     command: bash
++
++  # `make ws`. Runs on base rather than tools: ament_python packages build
++  # without their exec_depends present, and each package only needs its real
++  # deps in the image that RUNS it. Keeps the build off the 1.5 GB Qt image.
++  wsbuild:
++    <<: *ros
++    profiles: [build]
++    image: ros2-essentials/base:${TAG:-dev}
++    command: ws-build
+diff --git a/scripts/doctor.sh b/scripts/doctor.sh
+index 69a1fc4..f794cbd 100755
+--- a/scripts/doctor.sh
++++ b/scripts/doctor.sh
+@@ -15,6 +15,22 @@ docker compose version >/dev/null 2>&1 \
+ docker info >/dev/null 2>&1 && ok "daemon reachable" \
+   || bad "cannot reach docker daemon (are you in the docker group?)"
+ 
++echo "host environment"
++if [ -n "${ROS_DISTRO:-}" ]; then
++  bad "ROS_DISTRO=${ROS_DISTRO} is exported by your shell"
++  echo "        A sourced ROS install leaks into make (?=) and compose"
++  echo "        (\${VAR:-default}) and silently picks the wrong base image."
++  echo "        This repo uses R2E_DISTRO instead, but anything else reading"
++  echo "        ROS_DISTRO on the host will still be confused. Consider not"
++  echo "        sourcing /opt/ros/*/setup.bash from .bashrc on a Docker host."
++else
++  ok "no ROS_DISTRO leaking from the shell"
++fi
++for v in ROS_DOMAIN_ID RMW_IMPLEMENTATION CYCLONEDDS_URI ROS_MASTER_URI; do
++  [ -n "${!v:-}" ] && warn "$v=${!v} exported by your shell (repo uses R2E_$v style names)"
++done
++[ -n "${CONDA_PREFIX:-}" ] && warn "conda env active (${CONDA_DEFAULT_ENV:-?}); harmless for docker, but its libtinfo shadows the system one and spams warnings"
++
+ echo "config"
+ [ -e "${ROOT}/.env" ] && ok ".env -> $(readlink -f "${ROOT}/.env" | sed "s|${ROOT}/||")" \
+   || bad "no .env -- run: make setup"
+-- 
+2.43.0
+
