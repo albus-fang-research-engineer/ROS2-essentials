@@ -85,26 +85,128 @@ is the deliberate, auditable step between them.
 
 ## Calibration workflow
 
-```bash
-# 1. ONCE per arm. Uncorrected DH deltas put mm-level error into FK, and
-#    hand-eye has no way to separate that from the extrinsic.
-make kinematics
+Each step has a check before it. Every one of these catches a failure that is
+invisible until you have already spent twenty minutes sampling.
 
-# 2. Bring the hardware up, then the calibration GUI.
-COMPOSE_PROFILES=ur,camera docker compose up -d
-make calibrate
+### 0. Configure the cell, once
 
-# 3. Jog to ~15-20 poses, "Take Sample" at each, then Compute and Save.
-#    Rotate the flange as far as joint limits allow about ALL THREE axes, in
-#    both directions. Translation-only samples leave the rotation estimate
-#    rank deficient and the solve will be confidently wrong.
+In `cells/<hostname>.env`:
 
-# 4. Promote the result into the cell's geometry.
-make promote CALIB=~/.ros2/easy_handeye2/calibrations/ur5e_d435_eob.calib
-
-# 5. The cell profile now publishes it on every boot.
-docker compose --profile cell up -d --force-recreate cell
 ```
+COMPOSE_PROFILES=ur,camera,calib     # drop `cell` -- it exits 2 with no extrinsics yet
+ROBOT_IP=<from the teach pendant, Settings > System > Network>
+CALIB_TYPE=eye_on_base               # or eye_in_hand
+CALIB_NAME=ur5e_d435_eob
+MARKER_SIZE=<black square edge, in METRES, measured with calipers>
+MARKER_ID=<an id valid in the dictionary you printed from>
+CAMERA_TF_ROOT=camera_link           # solve for this, NOT an optical frame
+```
+
+Find the robot IP from the host if the pendant is not handy — every UR
+controller answers on TCP 29999:
+
+```bash
+ip -brief addr                             # which interface is on the robot subnet?
+nmap -p 29999 --open -T4 10.0.0.0/24       # substitute the real subnet
+nc <ip> 29999                              # greets you with the dashboard banner
+```
+
+### 1. Arm kinematics, once per arm
+
+```bash
+make kinematics       # writes config/ur_kinematics.yaml
+```
+
+Not optional. Uncorrected DH deltas put mm-level error into FK, and hand-eye
+has no way to separate that from the extrinsic — it lands in your result.
+
+### 2. Bring up the hardware, then verify both halves
+
+```bash
+docker compose up -d ur camera
+```
+
+```bash
+# robot side: does FK reach the flange?
+docker compose --profile shell run --rm shell bash -lc \
+  'ros2 run tf2_ros tf2_echo base_link tool0'
+
+# camera side: are frames actually flowing?
+docker compose --profile shell run --rm shell bash -lc \
+  'ros2 topic hz /camera/camera/color/image_raw'
+
+# camera subtree intact, exactly one parent for camera_link?
+docker compose --profile shell run --rm shell bash -lc \
+  'ros2 run tf2_ros tf2_echo camera_link camera_color_optical_frame'
+```
+
+### 3. Mount the target, then confirm it is detected
+
+Print the marker. Mount it **rigidly** — a marker that flexes relative to the
+flange is unrecoverable noise. Measure the printed black square with calipers
+and put that in `MARKER_SIZE`; printer scaling lies, and a 2% size error is a
+2% range bias that no number of extra samples will average away.
+
+```bash
+docker compose --profile calib up tracker
+```
+
+```bash
+# annotated debug stream: a detected marker gets drawn on
+docker compose --profile shell run --rm shell bash -lc \
+  'ros2 run rqt_image_view rqt_image_view /aruco_single/result'
+
+# and it should appear in tf, moving when you move the arm
+docker compose --profile shell run --rm shell bash -lc \
+  'ros2 run tf2_ros tf2_echo camera_link aruco_marker_frame'
+```
+
+Nothing drawn means the wrong dictionary, wrong `MARKER_ID`, or
+`min_marker_size` rejecting it as too small. That is a printing problem, not a
+calibration problem — fix it here.
+
+### 4. Sample
+
+```bash
+make calibrate
+```
+
+Put the arm in freedrive. At each pose: check the marker is clearly in frame,
+then **Take Sample**. 15–20 poses.
+
+**Rotate the flange as far as joint limits allow about all three axes, in both
+directions.** This is the single thing that determines whether the result is
+any good. Translation-only samples leave the rotation estimate rank deficient
+and the solve comes back confident and wrong. Vary distance and where the
+marker sits in the image too — corners as well as centre.
+
+Then **Compute**, then **Save**.
+
+### 5. Promote
+
+```bash
+make promote CALIB=~/.ros2/easy_handeye2/calibrations/ur5e_d435_eob.calib
+```
+
+Read the `|t|` line it prints. If the distance is nothing like where the camera
+physically sits, that is a frame-convention mistake (`base_link` vs `base`),
+not a bad solve. The script refuses outright to write an `*_optical_frame`
+child — see the TF-tree note in Gotchas.
+
+### 6. Put `cell` back and verify
+
+Add `cell` to `COMPOSE_PROFILES`, then:
+
+```bash
+docker compose --profile cell up -d --force-recreate cell
+docker compose --profile shell run --rm shell bash -lc \
+  'ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame'
+```
+
+Sanity-check against reality: put the marker somewhere you can measure, and
+confirm its position in `base_link` matches a tape measure to within a few mm.
+A calibration that solves cleanly but is wrong by a fixed offset will otherwise
+not surface until a grasp misses.
 
 ## Adding a module
 
