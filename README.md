@@ -126,6 +126,17 @@ docker compose --profile cell up -d --force-recreate cell
   extra samples will average away.
 - **Two NICs, one Cyclone.** With a robot NIC and a lab NIC, pin the interface
   in `config/cyclonedds.xml` or discovery will intermittently pick wrong.
+- **A sourced ROS install on the host poisons the build.** If your `.bashrc`
+  sources `/opt/ros/noetic/setup.bash`, your shell exports `ROS_DISTRO=noetic`
+  — and both make's `?=` and compose's `${VAR:-default}` treat an exported
+  variable as already-set. A bare `ROS_DISTRO` in this repo would silently
+  build `FROM ros:noetic-ros-base`. That is why every host-facing knob here is
+  `R2E_*` (`R2E_DISTRO`, `R2E_DOMAIN_ID`, `R2E_RMW`, `R2E_CYCLONEDDS_URI`) and
+  only becomes `ROS_DISTRO` etc. inside the container. `make doctor` flags it.
+- **These images are local-only.** Compose responds to a missing image by
+  trying to pull it, so a failed build surfaces later as `pull access denied
+  for ros2-essentials/...`. The `require-*` guards in the Makefile catch this
+  and tell you which `make` target you actually skipped.
 - **`HOST_UID` must match you.** Otherwise `src/` fills with root-owned
   `build/` and `install/` trees. `make doctor` checks this.
 - **CUDA 11.4 hosts cannot run `base-cuda`.** NVIDIA ships no 22.04 image below

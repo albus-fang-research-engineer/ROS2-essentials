@@ -23,9 +23,9 @@ x-ros: &ros
   tty: true
   restart: "no"
   environment: &ros-env
-    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
-    RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
-    CYCLONEDDS_URI: ${CYCLONEDDS_URI:-}
+    ROS_DOMAIN_ID: ${R2E_DOMAIN_ID:-42}
+    RMW_IMPLEMENTATION: ${R2E_RMW:-rmw_cyclonedds_cpp}
+    CYCLONEDDS_URI: ${R2E_CYCLONEDDS_URI:-}
     CELL_NAME: ${CELL_NAME:-unnamed-cell}
   volumes: &ros-vols
     - ./src:/ws/src
@@ -59,7 +59,7 @@ services:
     build:
       context: .
       dockerfile: docker/modules/ur/Dockerfile
-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
+      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}", TAG: "${TAG:-dev}",
               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
     command: >
       ros2 launch ur_robot_driver ur_control.launch.py
@@ -106,7 +106,7 @@ services:
     build:
       context: .
       dockerfile: docker/modules/realsense/Dockerfile
-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
+      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}", TAG: "${TAG:-dev}",
               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
     privileged: true
     volumes:
@@ -134,7 +134,7 @@ services:
     build:
       context: .
       dockerfile: docker/modules/calibration/Dockerfile
-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
+      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}", TAG: "${TAG:-dev}",
               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
     command: >
       ros2 launch handeye_bringup tracker.launch.py
@@ -184,7 +184,7 @@ services:
     build:
       context: .
       dockerfile: docker/base/Dockerfile
-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}",
+      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}",
               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
     command: >
       ros2 launch cell_description extrinsics.launch.py
@@ -201,7 +201,7 @@ services:
     build:
       context: .
       dockerfile: docker/modules/perception/Dockerfile
-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
+      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}", TAG: "${TAG:-dev}",
               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
     command: >
       ros2 launch ros_zmq_bridge bridge.launch.py
@@ -222,7 +222,7 @@ services:
     build:
       context: .
       dockerfile: docker/modules/tools/Dockerfile
-      args: { ROS_DISTRO: "${ROS_DISTRO:-humble}", TAG: "${TAG:-dev}",
+      args: { ROS_DISTRO: "${R2E_DISTRO:-humble}", TAG: "${TAG:-dev}",
               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
     command: rviz2 -d /config/rviz/${RVIZ_CONFIG:-cell.rviz}
 
@@ -237,3 +237,12 @@ services:
     profiles: [shell]
     image: ros2-essentials/tools:${TAG:-dev}
     command: bash
+
+  # `make ws`. Runs on base rather than tools: ament_python packages build
+  # without their exec_depends present, and each package only needs its real
+  # deps in the image that RUNS it. Keeps the build off the 1.5 GB Qt image.
+  wsbuild:
+    <<: *ros
+    profiles: [build]
+    image: ros2-essentials/base:${TAG:-dev}
+    command: ws-build

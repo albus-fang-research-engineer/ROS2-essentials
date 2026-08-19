@@ -6,18 +6,34 @@
 # ===========================================================================
 
 SHELL := /bin/bash
-ROS_DISTRO ?= humble
+
+# Host-facing knobs are R2E_* on purpose. A machine with ROS 1 sourced exports
+# ROS_DISTRO=noetic, and BOTH make's `?=` and compose's `${VAR:-default}` treat
+# an exported shell variable as already-set -- so a bare ROS_DISTRO here would
+# silently build FROM ros:noetic-ros-base. Same trap for ROS_DOMAIN_ID and
+# RMW_IMPLEMENTATION. Inside the containers these are still ROS_DISTRO etc.
+R2E_DISTRO ?= humble
 TAG        ?= dev
 HOST_UID   := $(shell id -u)
 HOST_GID   := $(shell id -g)
 CELL       ?= $(shell hostname)
 
-BUILD_ARGS = --build-arg ROS_DISTRO=$(ROS_DISTRO) \
+BUILD_ARGS = --build-arg ROS_DISTRO=$(R2E_DISTRO) \
              --build-arg TAG=$(TAG) \
              --build-arg HOST_UID=$(HOST_UID) \
              --build-arg HOST_GID=$(HOST_GID)
 
 .DEFAULT_GOAL := help
+
+ifneq ($(origin ROS_DISTRO),undefined)
+  ifneq ($(ROS_DISTRO),$(R2E_DISTRO))
+    $(info )
+    $(info note: your shell exports ROS_DISTRO=$(ROS_DISTRO) (a sourced ROS install).)
+    $(info       This repo ignores it and builds $(R2E_DISTRO). If you meant to)
+    $(info       change the target distro, set R2E_DISTRO, not ROS_DISTRO.)
+    $(info )
+  endif
+endif
 
 # --- setup ------------------------------------------------------------------
 
@@ -73,9 +89,18 @@ perception: base ## ROS side of the ZMQ perception boundary
 
 # --- workspace --------------------------------------------------------------
 
+# Guard: compose will try to PULL a missing local image and fail with an
+# unhelpful "pull access denied" instead of saying the build never ran.
+.PHONY: require-%
+require-%:
+	@docker image inspect ros2-essentials/$*:$(TAG) >/dev/null 2>&1 || { \
+		echo "missing image ros2-essentials/$*:$(TAG)"; \
+		echo "  these images are local-only; compose cannot pull them."; \
+		echo "  run: make $*   (or: make build)"; exit 1; }
+
 .PHONY: ws
-ws: ## colcon build the bind-mounted workspace in src/
-	docker compose --profile shell run --rm shell ws-build
+ws: require-base ## colcon build the bind-mounted workspace in src/
+	docker compose --profile build run --rm wsbuild
 
 .PHONY: ws-clean
 ws-clean: ## Remove colcon artefacts from src/ (they are gitignored, not tracked)
@@ -100,17 +125,17 @@ logs: ## Tail all logs
 	docker compose logs -f --tail=100
 
 .PHONY: shell
-shell: ## Interactive shell in the tools image
+shell: require-tools ## Interactive shell in the tools image
 	docker compose --profile shell run --rm shell bash
 
 # --- calibration workflow ---------------------------------------------------
 
 .PHONY: kinematics
-kinematics: ## ONE-SHOT: pull the arm's factory DH deltas into config/
+kinematics: require-ur ## ONE-SHOT: pull the arm's factory DH deltas into config/
 	docker compose --profile oneshot run --rm ur-kinematics
 
 .PHONY: calibrate
-calibrate: ## Interactive hand-eye calibration (needs ur + camera already up)
+calibrate: require-calibration ## Interactive hand-eye calibration (needs ur + camera up)
 	docker compose --profile calib up
 
 .PHONY: promote
@@ -119,13 +144,13 @@ promote: ## Promote a .calib into the cell extrinsics: make promote CALIB=path/t
 	scripts/promote_calibration.py --calib "$(CALIB)" --cell "$(CELL)"
 
 .PHONY: demo
-demo: ## Offline calibration smoke test, no hardware
+demo: require-calibration ## Offline calibration smoke test, no hardware
 	docker compose --profile demo up handeye-demo
 
 # --- introspection ----------------------------------------------------------
 
 .PHONY: tf
-tf: ## Dump the current TF tree to /tmp
+tf: require-tools ## Dump the current TF tree to /tmp
 	docker compose --profile shell run --rm shell \
 		bash -lc 'cd /tmp && ros2 run tf2_tools view_frames'
 

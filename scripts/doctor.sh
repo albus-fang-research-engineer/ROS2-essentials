@@ -15,6 +15,22 @@ docker compose version >/dev/null 2>&1 \
 docker info >/dev/null 2>&1 && ok "daemon reachable" \
   || bad "cannot reach docker daemon (are you in the docker group?)"
 
+echo "host environment"
+if [ -n "${ROS_DISTRO:-}" ]; then
+  bad "ROS_DISTRO=${ROS_DISTRO} is exported by your shell"
+  echo "        A sourced ROS install leaks into make (?=) and compose"
+  echo "        (\${VAR:-default}) and silently picks the wrong base image."
+  echo "        This repo uses R2E_DISTRO instead, but anything else reading"
+  echo "        ROS_DISTRO on the host will still be confused. Consider not"
+  echo "        sourcing /opt/ros/*/setup.bash from .bashrc on a Docker host."
+else
+  ok "no ROS_DISTRO leaking from the shell"
+fi
+for v in ROS_DOMAIN_ID RMW_IMPLEMENTATION CYCLONEDDS_URI ROS_MASTER_URI; do
+  [ -n "${!v:-}" ] && warn "$v=${!v} exported by your shell (repo uses R2E_$v style names)"
+done
+[ -n "${CONDA_PREFIX:-}" ] && warn "conda env active (${CONDA_DEFAULT_ENV:-?}); harmless for docker, but its libtinfo shadows the system one and spams warnings"
+
 echo "config"
 [ -e "${ROOT}/.env" ] && ok ".env -> $(readlink -f "${ROOT}/.env" | sed "s|${ROOT}/||")" \
   || bad "no .env -- run: make setup"
