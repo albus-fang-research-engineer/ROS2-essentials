@@ -17,3 +17,4 @@ __pycache__/
 
 # patch files live outside the repo
 *.patch
+marker_sheet.png
