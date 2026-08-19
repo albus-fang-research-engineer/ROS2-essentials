@@ -149,13 +149,12 @@ marker: ## Printable marker sheet: make marker SIZE=0.06 [ID=42] [DICT=ARUCO_ORI
 				--out /ws/marker_sheet.png; \
 	fi
 
-.PHONY: markers-seen
-markers-seen: require-calibration ## List every marker id the camera can currently see
-	docker compose --profile calib run --rm tracker bash -lc '\
-	  ros2 run aruco_ros marker_publisher --ros-args \
-	    -p image_is_rectified:=true -p marker_size:=$(or $(SIZE),0.05) \
-	    -r /camera_info:=$(CAMERA_INFO_TOPIC) -r /image:=$(IMAGE_TOPIC) & \
-	  sleep 5; ros2 topic echo --once /aruco_marker_publisher/markers'
+.PHONY: marker-picker
+marker-picker: require-calibration ## Live view of every marker id the camera sees
+	docker compose --profile calib run --rm tracker \
+		ros2 launch handeye_bringup marker_picker.launch.py \
+			image_topic:=$(or $(IMAGE_TOPIC),/camera/camera/color/image_raw) \
+			camera_info_topic:=$(or $(CAMERA_INFO_TOPIC),/camera/camera/color/camera_info)
 
 .PHONY: calibrate
 calibrate: require-calibration ## Interactive hand-eye calibration (needs ur + camera up)

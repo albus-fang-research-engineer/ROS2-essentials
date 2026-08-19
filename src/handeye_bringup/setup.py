@@ -19,5 +19,9 @@ setup(
     maintainer_email='albus@example.com',
     description='Hand-eye calibration bring-up.',
     license='MIT',
-    entry_points={'console_scripts': []},
+    entry_points={
+        'console_scripts': [
+            'marker_report = handeye_bringup.marker_report:main',
+        ],
+    },
 )

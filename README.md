@@ -150,11 +150,17 @@ fixed at the vendored library's default — and a marker from the wrong one is
 never detected, silently, with no warning of any kind.
 
 **If you already have a marker or board**, ask the detector what it sees rather
-than guessing. Every id it reports is by definition in the right dictionary:
+than guessing:
 
 ```bash
-make markers-seen SIZE=0.05
+make marker-picker
 ```
+
+That opens a live annotated view with every detected marker outlined and its id
+drawn on it, plus a console readout of how often each id is detected. Move the
+board around the workspace and pick an id that stays near 100% — an id seen in
+40% of frames will make sampling miserable long before it makes the solve
+wrong. Anything it outlines is by definition in the right dictionary.
 
 **If you don't**, print a candidate sheet: the same id rendered from each
 plausible dictionary, two columns, sized for A4/Letter.
