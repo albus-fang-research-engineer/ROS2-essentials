@@ -223,6 +223,11 @@ not surface until a grasp misses.
   show `/base_link`; that is ROS 1 legacy and ROS 2 `tf2` rejects it.
 - **UR frames.** `base_link` is the URDF root; `base` is the ROS-Industrial
   rotated frame. Mixing them costs a 180° yaw that looks almost plausible.
+- **Launch args cannot take an empty value.** `serial_no:=` with nothing after
+  it is a parse error, not an omission — so any optional launch argument must
+  be passed as a whole token (`CAMERA_EXTRA_ARGS`), never as a variable that
+  expands to nothing inside one. Camera serials also need a leading underscore
+  (`serial_no:=_912112073098`) or the parser reads them as numbers.
 - **Never solve for an optical frame.** The camera driver already publishes
   `camera_link -> camera_color_frame -> camera_color_optical_frame`. If the
   calibration targets the optical frame and you publish that result, the

@@ -117,11 +117,11 @@ services:
     command: >
       ros2 launch realsense2_camera rs_launch.py
         camera_name:=${CAMERA_NAME:-camera}
-        serial_no:=${CAMERA_SERIAL:-}
         rgb_camera.profile:=${RGB_PROFILE:-1280x720x30}
         enable_depth:=${ENABLE_DEPTH:-true}
         align_depth.enable:=${ALIGN_DEPTH:-true}
         pointcloud.enable:=false
+        ${CAMERA_EXTRA_ARGS:-}
 
   # ======================================================================
   # profile: calib   (producer -- runs a few times a year, interactive)
