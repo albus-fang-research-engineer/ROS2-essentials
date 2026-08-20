@@ -162,12 +162,23 @@ marker-picker: require-calibration ## Live view of every marker id the camera se
 
 .PHONY: calibrate
 calibrate: require-calibration ## Interactive hand-eye calibration (needs ur + camera up)
+	@# Docker creates a missing bind-mount source as root, and Save would then
+	@# fail inside the container with a permission error after all the sampling.
+	@mkdir -p calibrations/_raw
 	docker compose --profile calib up
 
 .PHONY: promote
-promote: ## Promote a .calib into the cell extrinsics: make promote CALIB=path/to.calib
-	@test -n "$(CALIB)" || (echo "usage: make promote CALIB=<path to .calib>"; exit 1)
-	scripts/promote_calibration.py --calib "$(CALIB)" --cell "$(CELL)"
+promote: ## Promote a .calib into the cell extrinsics: make promote [CALIB=path/to.calib]
+	@set -e; \
+	calib="$(CALIB)"; \
+	if [ -z "$$calib" ]; then \
+	  calib=$$(ls -t calibrations/_raw/*.calib 2>/dev/null | head -1); \
+	  test -n "$$calib" || { \
+	    echo "no .calib in calibrations/_raw/ -- did you press Save in the GUI?"; \
+	    echo "usage: make promote CALIB=<path to .calib>"; exit 1; }; \
+	  echo "promoting most recent: $$calib"; \
+	fi; \
+	scripts/promote_calibration.py --calib "$$calib" --cell "$(CELL)"
 
 .PHONY: demo
 demo: require-calibration ## Offline calibration smoke test, no hardware

@@ -14,6 +14,11 @@ __pycache__/
 
 # NOT ignored: calibrations/. Calibration results are data. Commit them,
 # date-stamp them, never overwrite them.
+#
+# Except calibrations/_raw/, which is only where easy_handeye2 drops its output
+# so the host can reach it. `make promote` archives a date-stamped copy into
+# calibrations/<cell>/, and that copy is the record worth keeping.
+/calibrations/_raw/
 
 # patch files live outside the repo
 *.patch

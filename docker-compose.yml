@@ -57,6 +57,12 @@ x-ros-gui: &ros-gui
     - ./log:/ws/log
     - ./config:/config:ro
     - ./calibrations:/calibrations
+    # easy_handeye2 writes its result to $HOME/.ros2/easy_handeye2/calibrations,
+    # which is inside the container and therefore gone the next time the image
+    # is rebuilt. Landing it in the repo instead makes `make promote` a normal
+    # host-side file operation rather than a docker cp. Only `handeye` writes
+    # here; the other GUI services share the anchor and ignore it.
+    - ./calibrations/_raw:/home/ros/.ros2/easy_handeye2/calibrations
     - /tmp/.X11-unix:/tmp/.X11-unix:rw
     - /tmp/.docker.xauth:/tmp/.docker.xauth:rw
 
