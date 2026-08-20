@@ -100,6 +100,10 @@ require-%:
 
 .PHONY: ws
 ws: require-base ## colcon build the bind-mounted workspace in src/
+	@# Create these before compose does. Docker creates a missing bind-mount
+	@# source as root, which is exactly the root-owned build tree the
+	@# UID-matched user exists to prevent.
+	@mkdir -p build install log
 	docker compose --profile build run --rm wsbuild
 
 .PHONY: ws-clean

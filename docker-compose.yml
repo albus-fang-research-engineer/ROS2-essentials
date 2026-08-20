@@ -28,7 +28,17 @@ x-ros: &ros
     CYCLONEDDS_URI: ${R2E_CYCLONEDDS_URI:-}
     CELL_NAME: ${CELL_NAME:-unnamed-cell}
   volumes: &ros-vols
+    # /ws/src alone is not enough. `ws-build` runs `colcon build` from /ws, so
+    # build/, install/ and log/ are written to /ws -- and if only /ws/src is
+    # bind-mounted those land inside the container and die with `run --rm`.
+    # The next container then has no /ws/install/setup.bash for the entrypoint
+    # to source, and every package in src/ is invisible:
+    #   Package 'handeye_bringup' not found, searching:
+    #     ['/opt/overlay/install/...', '/opt/ros/humble']
     - ./src:/ws/src
+    - ./build:/ws/build
+    - ./install:/ws/install
+    - ./log:/ws/log
     - ./config:/config:ro
     - ./calibrations:/calibrations
 
@@ -40,7 +50,11 @@ x-ros-gui: &ros-gui
     QT_X11_NO_MITSHM: 1
     XAUTHORITY: /tmp/.docker.xauth
   volumes:
+    # Same set as *ros-vols (YAML cannot merge sequences), plus X11.
     - ./src:/ws/src
+    - ./build:/ws/build
+    - ./install:/ws/install
+    - ./log:/ws/log
     - ./config:/config:ro
     - ./calibrations:/calibrations
     - /tmp/.X11-unix:/tmp/.X11-unix:rw
