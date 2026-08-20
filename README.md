@@ -23,6 +23,7 @@ cd ROS2-essentials
 
 make setup          # links .env -> cells/$(hostname).env, preps X11 cookie
 $EDITOR cells/$(hostname).env    # robot IP, camera serial, COMPOSE_PROFILES
+make host-tune      # ONE-OFF, sudo: kernel socket buffers for image topics
 make doctor         # checks the things that waste the most time
 make build          # base -> base-gui -> modules, in order
 make ws             # colcon build the packages in src/
@@ -283,12 +284,37 @@ not surface until a grasp misses.
 - **Measure the marker.** `MARKER_SIZE` is the black square edge in metres, and
   printers lie about scale. A 2% size error is a 2% range bias no number of
   extra samples will average away.
-- **Never set a socket-buffer `min` in `cyclonedds.xml`.** A `min` the kernel
-  cannot grant (capped by `net.core.rmem_max`, ~425 KB by default) makes
-  Cyclone fail domain creation, and every node dies with
-  `rmw_create_node: failed to create domain, error Error` — which names
-  neither the buffer nor the config file. Raise `net.core.rmem_max` on the host
-  if you need the headroom for image topics.
+- **The DDS socket buffer needs BOTH halves, and bites you either way if it
+  only has one.** A `min` in `cyclonedds.xml` that the kernel cannot grant
+  (capped by `net.core.rmem_max`, 212992 bytes by default) makes Cyclone fail
+  domain creation, and every node dies with `rmw_create_node: failed to create
+  domain, error Error` — which names neither the buffer nor the config file.
+  But deleting the `min` does not fix that, it only makes the failure quiet:
+  `rmem_max` is a *ceiling* on what `setsockopt(SO_RCVBUF)` may grant, so with
+  no request every socket comes up at `rmem_default` regardless. Symptom of the
+  quiet version: 1280x720 rgb8 is 2.76 MB, fragmented into ~43 datagrams
+  arriving as one burst 30 times a second, so almost every sample lands
+  incomplete — and one lost fragment discards the *whole* sample.
+  **`ros2 topic echo` still works** (reliable readers repair by retransmit, at a
+  degraded rate with multi-hundred-ms stalls) **while rviz's Image display shows
+  one frame and then freezes** (best effort, no repair). That split is the
+  signature; do not read a working `echo` as a healthy stream. `make host-tune`
+  raises the ceiling, `config/cyclonedds.xml` makes the request, and
+  `make doctor` compares the two numbers.
+- **Confirm packet loss with the right counter.** `netstat -su`'s "packet
+  receive errors" lumps buffer overruns in with checksum and no-port errors.
+  `nstat -az | grep -i UdpRcvbufErrors` isolates the one that matters, and
+  `ss -uapm` shows the buffer a live socket actually got (`rb:` — you want
+  millions, not 212992).
+- **Do not fix an image display by setting it to Reliable.** It works, which is
+  why it is tempting, and it is a diagnostic rather than a fix. A reliable
+  reader makes the writer hold samples until they are acked, so a slow
+  subscriber (rviz on llvmpipe — the `viz` service gets no `/dev/dri`) fills the
+  writer history cache and blocks `publish()` in the camera node for *every*
+  consumer, tracker included. A viewer must never be able to throttle a sensor
+  driver. Keep `Reliability Policy: Best Effort` in `cell.rviz` and fix the
+  buffer instead. rviz rewrites its config on exit, so check
+  `git diff config/rviz/` before committing after a debugging session.
 - **Two NICs, one Cyclone.** With a robot NIC and a lab NIC, pin the interface
   in `config/cyclonedds.xml` or discovery will intermittently pick wrong.
 - **Container env is frozen at create time.** Editing `cells/<host>.env`

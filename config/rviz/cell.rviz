@@ -53,6 +53,14 @@ Visualization Manager:
       Frame Timeout: 15
       Value: true
 
+    # Best Effort is DELIBERATE and must stay that way. Setting it to Reliable
+    # makes a frozen image display start working, which is why it is tempting,
+    # but it lets a slow rviz fill the camera node's writer history cache and
+    # block publish() for every other subscriber. If this display freezes after
+    # one frame the socket receive buffer is too small, not the QoS: `make
+    # host-tune`, then `docker compose up -d --force-recreate`.
+    #
+    # rviz rewrites this file on exit. `git diff config/rviz/` before you commit.
     - Class: rviz_default_plugins/Image
       Name: ColorImage
       Enabled: true

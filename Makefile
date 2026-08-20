@@ -46,6 +46,10 @@ setup: ## First-run: link .env to this machine's cell config, prep X11
 x11: ## Refresh the X11 cookie (once per login session)
 	@scripts/x11_setup.sh
 
+.PHONY: host-tune
+host-tune: ## ONE-OFF, needs sudo: raise net.core.rmem_max for camera-sized DDS samples
+	@scripts/tune_host.sh
+
 # --- images -----------------------------------------------------------------
 
 .PHONY: build

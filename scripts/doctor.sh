@@ -64,14 +64,57 @@ if [ -e "${ROOT}/.env" ]; then
     ok "cell file uses current key names"
   fi
 
-  # A hard socket-buffer minimum in cyclonedds.xml that the kernel cannot meet
-  # kills domain creation for every node with an opaque error.
+  # Socket receive buffer. TWO failure modes, opposite directions:
+  #   min > rmem_max        -> every node dies at domain creation, loudly
+  #   no min, small rmem    -> large image samples silently never assemble
+  # Comparing the two numbers is the whole check; warning that a min merely
+  # exists tells you nothing.
   CDDS="${ROOT}/config/cyclonedds.xml"
-  if [ -f "${CDDS}" ] && grep -qE 'MinimumSocketReceiveBufferSize|SocketReceiveBufferSize[^>]*min=' "${CDDS}"; then
-    RMEM=$(cat /proc/sys/net/core/rmem_max 2>/dev/null || echo 0)
-    warn "cyclonedds.xml requests a socket buffer minimum; host rmem_max=${RMEM}"
-    echo "        If it exceeds rmem_max, every node fails with"
-    echo "        'rmw_create_node: failed to create domain'."
+  RMEM=$(cat /proc/sys/net/core/rmem_max 2>/dev/null || echo 0)
+  if [ -f "${CDDS}" ]; then
+    RAW=$(grep -oE 'SocketReceiveBufferSize[^>]*min="[0-9]+(B|kB|KB|MB|GB)?"' "${CDDS}" \
+            | grep -oE 'min="[0-9]+(B|kB|KB|MB|GB)?"' | head -1 \
+            | sed -e 's/min="//' -e 's/"//')
+    if [ -n "${RAW}" ]; then
+      NUM=${RAW//[!0-9]/}; UNIT=${RAW//[0-9]/}
+      case "${UNIT}" in
+        MB) MINB=$((NUM * 1024 * 1024)) ;;
+        GB) MINB=$((NUM * 1024 * 1024 * 1024)) ;;
+        kB|KB) MINB=$((NUM * 1024)) ;;
+        *)  MINB=${NUM} ;;
+      esac
+      if [ "${MINB}" -gt "${RMEM}" ]; then
+        bad "cyclonedds min=${RAW} exceeds net.core.rmem_max=${RMEM}"
+        echo "        The kernel will refuse it and EVERY node will die with"
+        echo "        'rmw_create_node: failed to create domain, error Error',"
+        echo "        which names neither the buffer nor this file. Fix:"
+        echo "          make host-tune"
+      else
+        ok "cyclonedds min=${RAW} fits under rmem_max=${RMEM}"
+      fi
+    else
+      warn "cyclonedds.xml requests no socket buffer minimum"
+      echo "        Raising rmem_max alone does nothing -- it is only a"
+      echo "        ceiling. Without a request every socket stays at"
+      echo "        net.core.rmem_default and large image samples drop."
+    fi
+  fi
+
+  # Independently of the config: is the ceiling big enough for the streams
+  # this cell actually runs? 1280x720 rgb8 is 2.76 MB per sample.
+  if [ "${RMEM}" -lt 8388608 ]; then
+    case "${COMPOSE_PROFILES:-}" in
+      *camera*|*perception*|*viz*)
+        warn "net.core.rmem_max=${RMEM} is small for image topics"
+        echo "        Expect BEST_EFFORT readers (rviz Image display) to show"
+        echo "        one frame and freeze, and reliable ones to limp along on"
+        echo "        retransmits. Confirm with a rising counter in:"
+        echo "          nstat -az | grep -i UdpRcvbufErrors"
+        echo "        Fix: make host-tune"
+        ;;
+    esac
+  else
+    ok "net.core.rmem_max=${RMEM}"
   fi
 fi
 

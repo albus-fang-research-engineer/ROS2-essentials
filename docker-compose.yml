@@ -49,6 +49,7 @@ x-ros-gui: &ros-gui
     DISPLAY: ${DISPLAY:-:0}
     QT_X11_NO_MITSHM: 1
     XAUTHORITY: /tmp/.docker.xauth
+    LIBGL_ALWAYS_SOFTWARE: "1"
   volumes:
     # Same set as *ros-vols (YAML cannot merge sequences), plus X11.
     - ./src:/ws/src
@@ -118,6 +119,13 @@ services:
   # ======================================================================
   # profile: camera
   # ======================================================================
+  # A camera is the textbook SENSOR_DATA case: a late frame is worthless, and
+  # a viewer must never be able to throttle a driver. The RealSense node
+  # defaults its image publishers to SYSTEM_DEFAULT (reliable), so a slow
+  # subscriber -- rviz on llvmpipe, say -- fills the writer history cache and
+  # blocks publish() for EVERY consumer, including the ArUco tracker. Override
+  # it via CAMERA_QOS_ARGS in the cell file. Passed as a whole token because a
+  # launch arg that expands to nothing is a parse error, not an omission.
   camera:
     <<: *ros
     profiles: [camera]
@@ -141,6 +149,7 @@ services:
         enable_depth:=${ENABLE_DEPTH:-true}
         align_depth.enable:=${ALIGN_DEPTH:-true}
         pointcloud.enable:=false
+        ${CAMERA_QOS_ARGS:-}
         ${CAMERA_EXTRA_ARGS:-}
 
   # ======================================================================
