@@ -356,3 +356,14 @@ under `compose/`. Compose's `include:` resolves relative paths against the
 silently becomes `compose/src`. `project_directory:` patches it, but then
 `extends:` resolution gets murky. Past ~15 services, revisit — with that caveat
 in hand.
+
+
+# Recalibrate
+```
+# put calib back in COMPOSE_PROFILES, mount the board on the flange
+docker compose up -d
+make calibrate
+make promote CALIB=calibrations/_raw/ur5e_d435_eob.calib
+# drop calib again
+make up
+```
