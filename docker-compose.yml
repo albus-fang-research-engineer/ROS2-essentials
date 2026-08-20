@@ -167,13 +167,15 @@ services:
               HOST_UID: "${HOST_UID:-1000}", HOST_GID: "${HOST_GID:-1000}" }
     command: >
       ros2 launch handeye_bringup tracker.launch.py
-        marker_id:=${MARKER_ID:-582}
-        marker_size:=${MARKER_SIZE:-0.05}
-        marker_frame:=${MARKER_FRAME:-aruco_marker_frame}
-        camera_optical_frame:=${CAMERA_OPTICAL_FRAME:-camera_color_optical_frame}
+        marker_dict:=${MARKER_DICT:-5X5_50}
+        marker_size:=${MARKER_SIZE:-0.0575}
+        marker_separation:=${MARKER_SEPARATION:-0.006}
+        markers_x:=${MARKERS_X:-3}
+        markers_y:=${MARKERS_Y:-4}
+        first_id:=${MARKER_ID:-0}
+        board_name:=${BOARD_NAME:-handeye}
         camera_ref_frame:=${CAMERA_TF_ROOT:-camera_link}
         image_topic:=${IMAGE_TOPIC:-/camera/camera/color/image_raw}
-        camera_info_topic:=${CAMERA_INFO_TOPIC:-/camera/camera/color/camera_info}
 
   handeye:
     <<: *ros-gui
@@ -187,7 +189,7 @@ services:
         robot_base_frame:=${ROBOT_BASE_FRAME:-base_link}
         robot_effector_frame:=${ROBOT_EE_FRAME:-tool0}
         tracking_base_frame:=${CAMERA_TF_ROOT:-camera_link}
-        tracking_marker_frame:=${MARKER_FRAME:-aruco_marker_frame}
+        tracking_marker_frame:=${MARKER_FRAME:-board_handeye}
         freehand_robot_movement:=${FREEHAND:-true}
 
   # Offline smoke test. No arm, no camera, no marker.

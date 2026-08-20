@@ -1,59 +1,149 @@
-"""ArUco marker tracker, wired to publish tracking_marker_frame into TF.
+"""ArUco GRID BOARD tracker (aruco_opencv), wired to publish into TF.
 
-WHY reference_frame IS NOT THE OPTICAL FRAME
+WHY NOT aruco_ros
 
-    The camera driver already owns a TF subtree:
+    aruco_ros vendors Rafael Munoz-Salinas' original `aruco` library, whose
+    dictionary set (ARUCO_ORIGINAL, ARUCO_MIP_36h12, ARTag, ChiliTags, the
+    AprilTag families) does NOT include OpenCV's NxN_M dictionaries. A board
+    printed from cv2.aruco.DICT_5X5_50 is therefore invisible to it at any
+    distance, any angle, with any min_marker_size -- silently, with no warning.
+    aruco_opencv wraps cv2.aruco directly and takes the dictionary as a
+    runtime parameter, so it is the only one of the two that can see this
+    board. `make identify-dict` is what tells you which you have.
+
+WHY A BOARD BEATS A SINGLE MARKER
+
+    12 markers x 4 corners = 48 point correspondences per frame instead of 4,
+    solved jointly against a known rigid geometry. Better conditioned, far less
+    sensitive to the two-solution PnP ambiguity that makes single planar
+    markers flip, and it degrades gracefully when part of the board is occluded
+    or glared out. The cost is that the geometry must be described correctly:
+    a wrong markers_x/markers_y or separation biases every corner constraint.
+
+WHY output_frame IS camera_link AND NOT AN OPTICAL FRAME
+
+    The camera driver already owns a subtree:
         camera_link -> camera_color_frame -> camera_color_optical_frame
 
     If the calibration solves base_link -> camera_color_optical_frame and you
-    publish that as a static transform, the optical frame acquires a SECOND
-    parent. TF is a tree, not a graph -- the two publishers fight, lookups go
-    non-deterministic, and the driver's subtree is effectively orphaned.
+    publish that, the optical frame gets a SECOND parent, tf2 stops being a
+    tree, and lookups go non-deterministic. aruco_opencv's `output_frame` is
+    the frame the board pose is REPORTED in -- it does the optical-frame
+    lookup internally using the driver's own TF -- so pointing it at
+    camera_link makes the solve target the root of the driver's subtree
+    directly. scripts/promote_calibration.py refuses an optical-frame child
+    for the same reason.
 
-    aruco_ros separates `camera_frame` (which optical frame the intrinsics
-    describe -- pure projection math) from `reference_frame` (which frame the
-    resulting pose is expressed in). Pointing reference_frame at camera_link
-    makes the calibration solve base_link -> camera_link directly, which
-    attaches cleanly at the ROOT of the driver's subtree. No post-hoc
-    composition with the driver's internal extrinsics, and nothing to redo when
-    you switch between the colour and depth optical frames.
+BOARD DESCRIPTION IS GENERATED, NOT COMMITTED
 
-The aruco_ros `single` node is instantiated directly rather than via upstream's
-single.launch.py, because the upstream launch argument names have drifted
-between distros while the NODE parameter names have been stable. Fewer moving
-parts to break on a distro bump.
+    aruco_opencv reads board geometry from a YAML file, not from parameters.
+    Committing that file would mean the board dimensions live in two places --
+    here and in cells/<host>.env -- and would drift. Instead the file is
+    written at launch time from the launch arguments, so cells/<host>.env
+    stays the single source of truth for what is physically on the bench.
 """
 
+from __future__ import annotations
+
+import os
+import tempfile
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 ARGS = [
-    ('marker_id', '582', 'ArUco id printed on the target.'),
-    ('marker_size', '0.05',
-     'Black square edge length in METRES. Measure the printed sheet -- '
-     'printer scaling lies, and a 2% size error is a 2% range bias.'),
-    ('marker_frame', 'aruco_marker_frame', 'TF frame the detector publishes.'),
-    ('camera_optical_frame', 'camera_color_optical_frame',
-     'Optical frame the intrinsics belong to. Used for the projection math '
-     'ONLY. No leading slash -- ROS 2 tf2 rejects them, and upstream docs '
-     'still show the ROS 1 style.'),
+    ('marker_dict', '5X5_50',
+     'OpenCV dictionary name WITHOUT the DICT_ prefix, e.g. 5X5_50. Run '
+     '`make identify-dict` to determine this from the physical board rather '
+     'than guessing -- a mismatch is undetectable except as 0%% detection.'),
+    ('marker_size', '0.0575',
+     'Black square edge of ONE marker, in METRES, measured with calipers. '
+     'Measure across several markers and divide; printer scaling lies, and a '
+     '2%% size error is a 2%% range bias no number of samples will average '
+     'away.'),
+    ('marker_separation', '0.006',
+     'White gutter between adjacent markers, in METRES. Must be measured, '
+     'not assumed: it sets the board geometry the joint solve relies on.'),
+    ('markers_x', '3', 'Markers across, in the board frame.'),
+    ('markers_y', '4', 'Markers down, in the board frame.'),
+    ('first_id', '0',
+     'Id of the top-left marker. OpenCV GridBoard numbers row-major from '
+     'there, so first_id + markers_x*markers_y - 1 must be the last id that '
+     '`make identify-dict` reported.'),
+    ('board_name', 'handeye',
+     'aruco_opencv publishes TF as board_<board_name>. Whatever you set here '
+     'must match MARKER_FRAME in the cell file, or easy_handeye2 will sample '
+     'a frame that does not exist and never say so.'),
     ('camera_ref_frame', 'camera_link',
-     'Frame the marker pose is REPORTED in, and therefore the frame the '
-     'calibration will solve for. Set this to the ROOT of the camera '
-     'driver\'s own TF subtree (camera_link for RealSense), NOT the optical '
-     'frame. See the note in the module docstring.'),
-    ('image_topic', '/camera/camera/color/image_raw', 'Rectified colour image.'),
-    ('camera_info_topic', '/camera/camera/color/camera_info', 'Intrinsics.'),
-    ('detection_mode', '',
-     'DM_NORMAL | DM_FAST | DM_VIDEO_FAST. Empty = the node default (normal). '
-     'NOTE: this node declares detection_mode, NOT corner_refinement -- '
-     'passing an undeclared parameter makes the node refuse to start.'),
-    ('min_marker_size', '0.02',
-     'Minimum marker area as a fraction of the image. Raise it to reject '
-     'far-away false positives.'),
+     'Frame the board pose is REPORTED in, and therefore the frame the '
+     'calibration solves for. The ROOT of the camera driver subtree, NOT an '
+     'optical frame. See the module docstring.'),
+    ('image_topic', '/camera/camera/color/image_raw',
+     'Base topic. aruco_opencv derives camera_info as a sibling of this, so '
+     '/camera/camera/color/image_raw implies /camera/camera/color/camera_info.'),
+    ('image_is_rectified', 'false',
+     'false = use the distortion coefficients from camera_info. Leave it '
+     'false: if D is all zeros the flag is a no-op, and if D is non-zero, '
+     'true would silently discard a real correction. Check with: ros2 topic '
+     'echo --once <camera_info_topic> | grep -A2 "^d:"'),
+    ('corner_refinement', '2',
+     '0 None, 1 Subpix, 2 Contour. Subpixel corner accuracy is most of what '
+     'determines the quality of the extrinsic; do not turn this off.'),
 ]
+
+
+def _write_board_description(context, *_args, **_kwargs):
+    """Materialise the board YAML aruco_opencv expects from launch args."""
+    def arg(name):
+        return LaunchConfiguration(name).perform(context)
+
+    name = arg('board_name')
+    board = (
+        f"- name: '{name}'\n"
+        f"  first_id: {int(arg('first_id'))}\n"
+        f"  markers_x: {int(arg('markers_x'))}\n"
+        f"  markers_y: {int(arg('markers_y'))}\n"
+        f"  marker_size: {float(arg('marker_size'))}\n"
+        f"  separation: {float(arg('marker_separation'))}\n"
+        # Origin placement is arbitrary for hand-eye: AX = XB absorbs the
+        # unknown board-to-flange transform, so only RIGIDITY matters.
+        f"  frame_at_center: true\n"
+    )
+
+    fd, path = tempfile.mkstemp(prefix='board_', suffix='.yaml')
+    with os.fdopen(fd, 'w') as handle:
+        handle.write(board)
+
+    # Load the package's own defaults first so every nested aruco.* parameter
+    # exists, then override. Passing a parameter the node has not declared
+    # makes it refuse to start, and the error does not name the parameter.
+    defaults = os.path.join(
+        get_package_share_directory('aruco_opencv'),
+        'config', 'aruco_tracker.yaml')
+
+    tracker = Node(
+        package='aruco_opencv',
+        executable='aruco_tracker_autostart',
+        name='aruco_tracker',
+        output='screen',
+        parameters=[
+            defaults,
+            {
+                'cam_base_topic': arg('image_topic'),
+                'output_frame': arg('camera_ref_frame'),
+                'marker_dict': arg('marker_dict'),
+                'marker_size': float(arg('marker_size')),
+                'image_is_rectified': arg('image_is_rectified') == 'true',
+                'board_descriptions_path': path,
+                'publish_tf': True,
+                'aruco.cornerRefinementMethod': int(arg('corner_refinement')),
+            },
+        ],
+    )
+    return [tracker]
 
 
 def generate_launch_description():
@@ -61,26 +151,4 @@ def generate_launch_description():
         DeclareLaunchArgument(name, default_value=default, description=desc)
         for name, default, desc in ARGS
     ]
-
-    tracker = Node(
-        package='aruco_ros',
-        executable='single',
-        name='aruco_single',
-        output='screen',
-        parameters=[{
-            'image_is_rectified': True,
-            'marker_size': LaunchConfiguration('marker_size'),
-            'marker_id': LaunchConfiguration('marker_id'),
-            'reference_frame': LaunchConfiguration('camera_ref_frame'),
-            'camera_frame': LaunchConfiguration('camera_optical_frame'),
-            'marker_frame': LaunchConfiguration('marker_frame'),
-            'detection_mode': LaunchConfiguration('detection_mode'),
-            'min_marker_size': LaunchConfiguration('min_marker_size'),
-        }],
-        remappings=[
-            ('/camera_info', LaunchConfiguration('camera_info_topic')),
-            ('/image', LaunchConfiguration('image_topic')),
-        ],
-    )
-
-    return LaunchDescription(declared + [tracker])
+    return LaunchDescription(declared + [OpaqueFunction(function=_write_board_description)])
