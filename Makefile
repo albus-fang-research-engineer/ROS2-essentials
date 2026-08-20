@@ -203,3 +203,10 @@ doctor: ## Sanity-check the host setup
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+		
+.PHONY: identify-dict
+identify-dict: require-calibration ## Sweep every ArUco dictionary against the live camera
+	docker compose --profile calib run --rm \
+		-v "$(PWD)/scripts:/scripts:ro" tracker \
+		python3 /scripts/identify_dictionary.py \
+			--topic $(or $(IMAGE_TOPIC),/camera/camera/color/image_raw)
